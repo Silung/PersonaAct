@@ -152,34 +152,31 @@ def parse_video_stats(image_path: str) -> dict:
         print(f"统计JSON解析失败: {e}")
         return {"like": 0, "comment": 0, "favorite": 0, "share": 0}
 
-def load_session_files(raw_data_dir: str) -> List[Tuple[str, Dict]]:
+def load_session_files(raw_data_dir: str, collector_name: str = None) -> List[Tuple[str, Dict]]:
     """
-    加载所有session文件
+    加载所有session文件（可选仅加载指定标注者）
     
     Args:
         raw_data_dir: raw_data目录路径
-        
+        collector_name: 标注者名字（如只加载某一人，默认None为所有）
     Returns:
         List of (collector_name, session_data) tuples
     """
     session_data = []
     raw_data_path = Path(raw_data_dir)
-    
-    # 遍历所有标注者的文件夹
-    for collector_dir in raw_data_path.iterdir():
+
+    # 如果指定collector_name, 只遍历其文件夹
+    collector_dirs = [raw_data_path / collector_name] if collector_name else list(raw_data_path.iterdir())
+
+    for collector_dir in collector_dirs:
         if not collector_dir.is_dir():
             continue
-            
-        collector_name = collector_dir.name
-        
-        # 查找该标注者的所有session文件
+        curr_name = collector_dir.name
         session_files = list(collector_dir.glob("session_*.json"))
-        
         for session_file in session_files:
             with open(session_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                session_data.append((collector_name, data))
-    
+                session_data.append((curr_name, data))
     return session_data
 
 
@@ -555,7 +552,8 @@ def prepare_training_data(
     window_size: int = 5,
     max_history: int = 3,
     audio_transcript_file: str = None,
-    random_seed: int = 42
+    random_seed: int = 42,
+    think: bool = False
 ):
     """
     将session数据切分为带历史的训练数据，并按session划分数据集避免信息泄露
@@ -567,6 +565,7 @@ def prepare_training_data(
         max_history: 最多使用多少条历史记录
         audio_transcript_file: 音频转录结果文件路径
         random_seed: 随机种子
+        think: 是否使用思考模式
     """
     print("\n" + "="*60)
     print("开始准备训练数据")
@@ -714,7 +713,7 @@ def prepare_training_data(
                     "audio_path": action.get('audio_path', '').replace('\\', '/')
                 }
             }
-
+            
             sample_thinking = {
                 "images": all_images,
                 "messages": [
@@ -758,7 +757,10 @@ def prepare_training_data(
                 }
             }
             
-            samples.append(sample)
+            if think:
+                samples.append(sample_thinking)
+            else:
+                samples.append(sample)
         
         return samples
     
@@ -816,7 +818,7 @@ def prepare_training_data(
     print("="*60)
     
     for display_name, (file_suffix, dataset) in dataset_file_mapping.items():
-        output_file_path = output_path.parent / f"video_action_{file_suffix}{ext}"
+        output_file_path = output_path.parent / f"{"thinking_" if think else ""}video_action_{file_suffix}{ext}"
         with open(output_file_path, 'w', encoding='utf-8') as f:
             for item in dataset:
                 f.write(json.dumps(item, ensure_ascii=False) + '\n')
@@ -860,7 +862,13 @@ def main():
     
     parser.add_argument('--random-seed', type=int, default=42,
                        help='随机种子（默认42）')
-    
+
+    parser.add_argument('--name', type=str, default=None,
+                       help='标注者名字（如只加载某一人，默认None为所有）')
+
+    parser.add_argument('--think', action='store_true', default=False,
+                       help='是否使用思考模式')
+
     args = parser.parse_args()
     
     print("\n" + "="*60)
@@ -869,7 +877,7 @@ def main():
     
     # 加载所有session文件
     print(f"正在从 {args.input} 加载session文件...")
-    session_data = load_session_files(args.input)
+    session_data = load_session_files(args.input, args.name)
     print(f"共加载 {len(session_data)} 个session")
     
     total_actions = sum(len(session['actions']) for _, session in session_data)
@@ -936,7 +944,8 @@ def main():
             window_size=args.window_size,
             max_history=args.max_history,
             audio_transcript_file=audio_transcript_file if os.path.exists(audio_transcript_file) else None,
-            random_seed=args.random_seed
+            random_seed=args.random_seed,
+            think=args.think
         )
     
     print("\n" + "="*60)

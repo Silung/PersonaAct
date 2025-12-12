@@ -282,8 +282,6 @@ class DiversityReward(ORM):
 # ---------------------------
 # FormatReward
 # ---------------------------
-
-
 class FormatReward(ORM):
     """
     格式奖励：检查输出是否包含正确的 Python 代码块格式并且可以正常解析
@@ -315,6 +313,40 @@ class FormatReward(ORM):
                 # 如果能解析出至少一个有效动作，则给予奖励
                 if actions:
                     reward = 1.0
+            rewards.append(reward)
+        return rewards
+
+
+class ThinkingFormatReward(ORM):
+    """
+    思考格式奖励（严格版）：要求输出为【先解释、后代码块】结构且动作解析成功
+    奖励规则：
+      - 必须严格为『解释（非空且不在代码块内）+ 一个 python 代码块（或 ``` … ）』，且能解析出至少一个动作，才给1.0。
+      - 其他任何情况 0.0。
+    """
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, completions: List[str], solution: List[str] = None, **kwargs) -> List[float]:
+        rewards = []
+        for completion in completions:
+            reward = 0.0
+            if completion:
+                # 只允许第一个代码块前的文本为解释，且只能有一个代码块
+                code_blocks = list(_ACTION_RE.finditer(completion))
+                if len(code_blocks) == 1:
+                    block = code_blocks[0]
+                    exp = completion[:block.start()].strip()
+                    code = block.group(0)
+                    # 解释必须非空且非代码
+                    has_exp = bool(exp) and not exp.startswith("```")
+                    # 后面不能还有多余代码块
+                    after = completion[block.end():].strip()
+                    no_extra = ("```" not in after)
+                    # 能否正常解析动作
+                    actions = parse_actions_from_completion(completion)
+                    if has_exp and no_extra and actions:
+                        reward = 1.0
             rewards.append(reward)
         return rewards
 
@@ -448,4 +480,5 @@ orms['video_quality'] = VideoQualityReward
 orms['persona'] = PersonaReward
 orms['diversity'] = DiversityReward
 orms['format'] = FormatReward
+orms['thinking_format'] = ThinkingFormatReward
 orms['solution'] = SolutionReward
