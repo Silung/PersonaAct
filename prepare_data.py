@@ -118,14 +118,13 @@ def get_category(image_paths: List[str], max_images: int = 10) -> dict:
 
 def parse_video_stats(image_path: str) -> dict:
     """
-    调用 LLM 视觉模型识别图片中的点赞/评论/收藏/转发数量
-    返回 dict: {"like": int, "comment": int, "favorite": int, "share": int}
+    调用 LLM 视觉模型识别图片中的点赞/评论/收藏/转发数量、作者和标题
+    返回 dict: {"like": int, "comment": int, "favorite": int, "share": int, "author": str, "title": str}
     """
-    sys_prompt = (
-        "请你识别图片中的短视频点赞、评论、收藏、转发数量。请仅输出JSON格式，示例：\n"
-        '{"like": 100, "comment": 22, "favorite": 8, "share": 3}。'
-        "'like'为点赞数，'comment'为评论数，'favorite'为收藏数，'share'为转发数。发现为空或识别不出来时请输出0。如果有单位需要换算，如“14.3万”应输出为143000。请严格保证输出格式为纯 JSON，不要多余内容。"
-    )
+    sys_prompt = """请你识别图片中的短视频点赞、评论、收藏、转发数量、作者名称和视频标题。请仅输出JSON格式，示例：
+{"like": 100, "comment": 22, "favorite": 8, "share": 3, "author": "用户名", "title": "视频标题"}。
+"like"为点赞数，"comment"为评论数，"favorite"为收藏数，"share"为转发数，"author"为作者名称，"title"为视频标题。
+发现为空或识别不出来时请输出0或空字符串。如果有单位需要换算，如"14.3万"应输出为143000。请严格保证输出格式为纯 JSON，不要多余内容。"""
     messages = [
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": [
@@ -141,17 +140,19 @@ def parse_video_stats(image_path: str) -> dict:
     try:
         text = clean_json_response(response.choices[0].message.content)
         stats = json.loads(text)
-        # 确保所有字段存在且为整数
-        result = {"like": 0, "comment": 0, "favorite": 0, "share": 0}
-        for key in result.keys():
+        # 确保所有字段存在且为正确类型
+        result = {"like": 0, "comment": 0, "favorite": 0, "share": 0, "author": "", "title": ""}
+        for key in ["like", "comment", "favorite", "share"]:
             if key in stats:
                 val = stats[key]
                 result[key] = int(val) if isinstance(val, (int, str)) and str(val).isdigit() else 0
+        for key in ["author", "title"]:
+            if key in stats:
+                result[key] = str(stats[key]) if stats[key] else ""
         return result
     except json.JSONDecodeError as e:
         print(f"统计JSON解析失败: {e}")
-        return {"like": 0, "comment": 0, "favorite": 0, "share": 0}
-
+        return {"like": 0, "comment": 0, "favorite": 0, "share": 0, "author": "", "title": ""}
 def load_session_files(raw_data_dir: str, collector_name: str = None) -> List[Tuple[str, Dict]]:
     """
     加载所有session文件（可选仅加载指定标注者）
@@ -166,12 +167,17 @@ def load_session_files(raw_data_dir: str, collector_name: str = None) -> List[Tu
     raw_data_path = Path(raw_data_dir)
 
     # 如果指定collector_name, 只遍历其文件夹
-    collector_dirs = [raw_data_path / collector_name] if collector_name else list(raw_data_path.iterdir())
+    if collector_name:
+        collector_dirs = [raw_data_path / collector_name]
+    else:
+        # 遍历raw_data下的所有子目录（标注者目录）
+        collector_dirs = [d for d in raw_data_path.iterdir() if d.is_dir()]
 
     for collector_dir in collector_dirs:
         if not collector_dir.is_dir():
             continue
         curr_name = collector_dir.name
+        # 在标注者目录下查找session_*.json文件
         session_files = list(collector_dir.glob("session_*.json"))
         for session_file in session_files:
             with open(session_file, 'r', encoding='utf-8') as f:
@@ -546,12 +552,165 @@ def analyze_stats_module(session_data: List[Tuple[str, Dict]], output_file: str)
     print(f"成功分析: {len(results)} 个视频")
 
 
+def analyze_action_reason(image_paths: List[str], action_info: dict) -> str:
+    """
+    分析用户做出某个动作的原因
+    
+    Args:
+        image_paths: 视频截图路径列表
+        action_info: 动作信息，包含 viewing_duration 和 actions
+        
+    Returns:
+        str: 简短的原因描述
+    """
+    # 构建动作描述
+    viewing_duration = action_info.get('viewing_duration', 0)
+    actions = action_info.get('actions', [])
+    
+    action_desc = f"观看了{viewing_duration:.1f}秒"
+    for act in actions:
+        action_type = act.get('type', '')
+        if action_type == 'like':
+            action_desc += "，点赞"
+        elif action_type == 'comment':
+            action_desc += f"，评论：{act.get('text', '')}"
+        elif action_type == 'share':
+            action_desc += f"，分享给：{act.get('text', '')}"
+    
+    sys_prompt = (
+        "你是一个短视频用户行为分析专家。根据视频截图和用户的实际行为，"
+        "用一句简短的话（不超过30字）分析用户做出这个行为的可能原因。\n"
+        "注意：\n"
+        "1. 原因要具体，结合视频内容\n"
+        "2. 如果用户快速划走，说明不感兴趣的原因，用户观看时间越长越有可能对视频内容感兴趣\n"
+        "3. 如果用户点赞/评论/分享，说明吸引用户的点\n"
+        "4. 只输出原因，不要有其他内容"
+    )
+    
+    # 构建多张图片的content
+    content = []
+    for img_path in image_paths[:5]:  # 最多5张图
+        if os.path.exists(img_path):
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"file://{os.path.abspath(img_path)}"}
+            })
+    
+    content.append({
+        "type": "text",
+        "text": f"用户行为：{action_desc}\n请分析原因："
+    })
+    
+    messages = [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": content}
+    ]
+    
+    try:
+        response = client.chat.completions.create(
+            model="qwen",
+            messages=messages,
+            temperature=0.3,
+            max_tokens=100
+        )
+        reason = response.choices[0].message.content.strip()
+        return reason
+    except Exception as e:
+        print(f"分析原因失败: {e}")
+        return ""
+
+
+def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str):
+    """
+    分析模块：分析用户动作原因
+    
+    Args:
+        session_data: session数据列表
+        output_file: 输出文件路径
+    """
+    print("\n" + "="*60)
+    print("开始分析用户动作原因")
+    print("="*60 + "\n")
+    
+    results = {}
+    
+    # 收集所有需要分析的动作
+    all_actions = []
+    for collector, session in session_data:
+        for action in session['actions']:
+            video_path = action.get('video_path', '').replace('\\', '/')
+            if video_path:
+                screenshots = get_video_screenshots(video_path, max_images=5)
+                if screenshots:
+                    all_actions.append({
+                        'video_path': video_path,
+                        'screenshots': screenshots,
+                        'viewing_duration': action.get('viewing_duration', 0),
+                        'actions': action.get('actions', []),
+                        'collector': collector,
+                        'session_id': session['session_id'],
+                        'timestamp': action.get('timestamp', '')
+                    })
+    
+    print(f"共找到 {len(all_actions)} 个动作需要分析原因")
+    
+    # 使用多线程处理
+    def process_single(action_info):
+        video_path = action_info['video_path']
+        screenshots = action_info['screenshots']
+        
+        reason = analyze_action_reason(screenshots, {
+            'viewing_duration': action_info['viewing_duration'],
+            'actions': action_info['actions']
+        })
+        
+        # 构建动作字符串
+        action_str = f"watch({action_info['viewing_duration']})"
+        for act in action_info['actions']:
+            action_type = act.get('type', '')
+            if action_type == 'like':
+                action_str += ", like()"
+            elif action_type == 'comment':
+                action_str += f", comment({act.get('text', '')})"
+            elif action_type == 'share':
+                action_str += f", share({act.get('text', '')})"
+        
+        return video_path, {
+            'action': action_str,
+            'reason': reason,
+            'collector': action_info['collector'],
+            'session_id': action_info['session_id'],
+            'timestamp': action_info['timestamp']
+        }
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(process_single, action) for action in all_actions]
+        
+        with tqdm(total=len(futures), desc="分析进度", ncols=80) as pbar:
+            for fut in concurrent.futures.as_completed(futures):
+                video_path, result = fut.result()
+                if result and result['reason']:
+                    results[video_path] = result
+                pbar.update(1)
+    
+    # 保存结果
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    
+    print(f"\n动作原因分析结果已保存到: {output_file}")
+    print(f"成功分析: {len(results)} 个动作")
+
+
 def prepare_training_data(
     session_data: List[Tuple[str, Dict]], 
     output_file: str,
     window_size: int = 5,
     max_history: int = 3,
     audio_transcript_file: str = None,
+    action_reason_file: str = None,
     random_seed: int = 42,
     think: bool = False
 ):
@@ -564,6 +723,7 @@ def prepare_training_data(
         window_size: 历史窗口大小
         max_history: 最多使用多少条历史记录
         audio_transcript_file: 音频转录结果文件路径
+        action_reason_file: 动作原因分析结果文件路径
         random_seed: 随机种子
         think: 是否使用思考模式
     """
@@ -582,6 +742,13 @@ def prepare_training_data(
             audio_transcripts = json.load(f)
         print(f"已加载 {len(audio_transcripts)} 个音频转录结果")
     
+    # 加载动作原因分析结果
+    action_reasons = {}
+    if action_reason_file and os.path.exists(action_reason_file):
+        with open(action_reason_file, 'r', encoding='utf-8') as f:
+            action_reasons = json.load(f)
+        print(f"已加载 {len(action_reasons)} 个动作原因分析结果")
+    
     # 第一步：按session划分（10% valid1, 10% test1, 80% 用于进一步划分）
     random.shuffle(session_data)
     total_sessions = len(session_data)
@@ -597,8 +764,8 @@ def prepare_training_data(
             video_path = action.get('video_path', '').replace('\\', '/')
             audio_path = action.get('audio_path', '').replace('\\', '/')
             
-            # 为当前视频提取多帧
-            current_screenshots = get_video_screenshots(audio_path, max_images=1e9)[-2:]
+            # 为当前视频只取第一帧（避免多帧暗示观看时长）
+            current_screenshots = get_video_screenshots(video_path, max_images=1)
             
             # 构建历史记录（每个历史只用一张图）
             start_idx = max(0, i - window_size + 1)
@@ -714,6 +881,18 @@ def prepare_training_data(
                 }
             }
             
+            # 获取动作原因（用于think模式）
+            reason_text = ""
+            if video_path in action_reasons:
+                reason_text = action_reasons[video_path].get('reason', '')
+            
+            # 构建带原因的回答
+            answer_with_reason = ""
+            if reason_text:
+                answer_with_reason = f"{reason_text}\n{answer}"
+            else:
+                answer_with_reason = answer
+            
             sample_thinking = {
                 "images": all_images,
                 "messages": [
@@ -742,10 +921,10 @@ def prepare_training_data(
                     },
                     {
                         "role": "assistant",
-                        "content": answer
+                        "content": answer_with_reason
                     }
                 ],
-                "solution": answer,
+                "solution": answer_with_reason,
                 "metadata": {
                     "collector": collector,
                     "session_id": session['session_id'],
@@ -845,8 +1024,8 @@ def main():
                        help='运行模式: extract(提取截图), analyze(分析), prepare(准备训练数据), all(全部)')
     
     parser.add_argument('--task', type=str, default='all',
-                       choices=['category', 'stats', 'audio', 'all'],
-                       help='分析任务: category(分类), stats(统计), audio(音频转文本), all(全部)')
+                       choices=['category', 'stats', 'audio', 'reason', 'all'],
+                       help='分析任务: category(分类), stats(统计), audio(音频转文本), reason(动作原因分析), all(全部)')
     
     parser.add_argument('--input', type=str, default='raw_data',
                        help='输入目录（raw_data目录）')
@@ -882,6 +1061,13 @@ def main():
     
     total_actions = sum(len(session['actions']) for _, session in session_data)
     print(f"共 {total_actions} 个视频动作记录\n")
+    
+    # 按标注者分组
+    collectors_data = {}
+    for collector, session in session_data:
+        if collector not in collectors_data:
+            collectors_data[collector] = []
+        collectors_data[collector].append((collector, session))
     
     # 根据模式执行不同的任务
     if args.mode in ['extract', 'all']:
@@ -923,30 +1109,45 @@ def main():
         print(f"平均每个视频: {total_frames/success_count:.1f} 帧" if success_count > 0 else "")
     
     if args.mode in ['analyze', 'all']:
-        if args.task in ['category', 'all']:
-            category_output = os.path.join(args.output_dir, 'category_analysis.json')
-            analyze_category_module(session_data, category_output)
-        
-        if args.task in ['stats', 'all']:
-            stats_output = os.path.join(args.output_dir, 'stats_analysis.json')
-            analyze_stats_module(session_data, stats_output)
-        
-        if args.task in ['audio', 'all']:
-            audio_output = os.path.join(args.output_dir, 'audio_transcript.json')
-            analyze_audio_module(session_data, audio_output)
+        # 为每个标注者分别进行分析
+        for collector_name, collector_session_data in collectors_data.items():
+            print(f"\n处理标注者: {collector_name}")
+            collector_output_dir = os.path.join(args.output_dir, collector_name)
+            
+            if args.task in ['category', 'all']:
+                category_output = os.path.join(collector_output_dir, 'category_analysis.json')
+                analyze_category_module(collector_session_data, category_output)
+            
+            if args.task in ['stats', 'all']:
+                stats_output = os.path.join(collector_output_dir, 'stats_analysis.json')
+                analyze_stats_module(collector_session_data, stats_output)
+            
+            if args.task in ['audio', 'all']:
+                audio_output = os.path.join(collector_output_dir, 'audio_transcript.json')
+                analyze_audio_module(collector_session_data, audio_output)
+            
+            if args.task in ['reason', 'all']:
+                reason_output = os.path.join(collector_output_dir, 'action_reason.json')
+                analyze_reason_module(collector_session_data, reason_output)
     
     if args.mode in ['prepare', 'all']:
-        train_output = os.path.join(args.output_dir, 'video_action_train.jsonl')
-        audio_transcript_file = os.path.join(args.output_dir, 'audio_transcript.json')
-        prepare_training_data(
-            session_data, 
-            train_output,
-            window_size=args.window_size,
-            max_history=args.max_history,
-            audio_transcript_file=audio_transcript_file if os.path.exists(audio_transcript_file) else None,
-            random_seed=args.random_seed,
-            think=args.think
-        )
+        # 为每个标注者分别准备训练数据
+        for collector_name, collector_session_data in collectors_data.items():
+            print(f"\n处理标注者: {collector_name}")
+            collector_output_dir = os.path.join(args.output_dir, collector_name)
+            train_output = os.path.join(collector_output_dir, 'video_action_train.jsonl')
+            audio_transcript_file = os.path.join(collector_output_dir, 'audio_transcript.json')
+            action_reason_file = os.path.join(collector_output_dir, 'action_reason.json')
+            prepare_training_data(
+                collector_session_data, 
+                train_output,
+                window_size=args.window_size,
+                max_history=args.max_history,
+                audio_transcript_file=audio_transcript_file if os.path.exists(audio_transcript_file) else None,
+                action_reason_file=action_reason_file if os.path.exists(action_reason_file) else None,
+                random_seed=args.random_seed,
+                think=args.think
+            )
     
     print("\n" + "="*60)
     print("✓ 所有任务完成！")
