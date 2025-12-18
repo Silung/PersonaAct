@@ -3,13 +3,20 @@ Interview Agent - 基于 LangChain 的用户访谈 Agent
 """
 import json
 import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Tuple
 from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from behavior_analyzer import BehaviorAnalyzer
+
+try:
+    from duckduckgo_search import DDGS
+    SEARCH_AVAILABLE = True
+except ImportError:
+    SEARCH_AVAILABLE = False
+    print("Warning: duckduckgo_search not installed. Search functionality disabled.")
 
 
 class InterviewAgent:
@@ -66,7 +73,33 @@ class InterviewAgent:
 🎯 8. 现实关联（Meaningful Engagement）
    - 内容与现实生活的联系
 
-当收集到足够信息后，生成用户画像。"""
+当收集到足够信息后，生成用户画像。
+
+## 🧠 大五人格维度参考
+
+在访谈过程中，注意观察和探索用户在以下维度的特征：
+
+1. **开放性（Openness）**：对新内容、新题材的接受度
+   - 高：主动尝试新类型、小众内容
+   - 低：偏好固定垂类、熟悉内容
+
+2. **尽责性（Conscientiousness）**：自律与时间管理
+   - 高：有意识控制刷视频时间、目的性强
+   - 低：容易沉迷、随性刷视频
+
+3. **外向性（Extraversion）**：社交与互动倾向
+   - 高：喜欢评论、互动、直播
+   - 低：偏好沉浸式观看、少互动
+
+4. **宜人性（Agreeableness）**：同理心与信任
+   - 高：容易点赞、关注创作者、信任推荐
+   - 低：批判性强、只看不互动
+
+5. **神经质（Neuroticism）**：情绪稳定性
+   - 高：情绪驱动、易被情绪内容吸引
+   - 低：理性选择、情绪稳定
+
+这些维度不需要直接询问，而是通过行为和态度自然推断。"""
 
     def __init__(
         self,
@@ -95,6 +128,9 @@ class InterviewAgent:
         self.full_history: List[Dict[str, str]] = []  # 完整历史（所有环节）
         self.interview_plan: List[Dict[str, Any]] = []
         self.current_section = 0
+        
+        # 搜索工具
+        self.ddgs = DDGS() if SEARCH_AVAILABLE else None
         self.section_turn = 0
     
     def _format_image_for_vllm(self, image_path: str) -> Dict[str, str]:
@@ -104,6 +140,54 @@ class InterviewAgent:
             "type": "image_url",
             "image_url": {"url": f"file://{absolute_path}"}
         }
+    
+    def _search_web(self, query: str, max_results: int = 3) -> str:
+        """使用 DuckDuckGo 搜索"""
+        if not self.ddgs:
+            return "搜索功能不可用（未安装 duckduckgo_search）"
+        
+        results = self.ddgs.text(query, max_results=max_results)
+        if not results:
+            return "没有找到相关信息"
+        
+        summary = []
+        for i, r in enumerate(results, 1):
+            title = r.get('title', '')
+            body = r.get('body', '')[:200]
+            summary.append(f"{i}. {title}\n{body}")
+        
+        return "\n\n".join(summary)
+    
+    def _parse_and_execute_search(self, text: str) -> Tuple[str, bool]:
+        """解析文本中的搜索请求并执行
+        
+        格式: [SEARCH: 关键词]
+        
+        Returns:
+            (处理后的文本, 是否执行了搜索)
+        """
+        # 匹配 [SEARCH: xxx] 格式
+        pattern = r'\[SEARCH:\s*(.+?)\]'
+        matches = re.findall(pattern, text)
+        
+        if not matches:
+            return text, False
+        
+        # 执行所有搜索
+        search_results = []
+        for query in matches:
+            query = query.strip()
+            print(f"🔍 执行搜索: {query}")
+            result = self._search_web(query, max_results=2)
+            search_results.append(f"[搜索 '{query}' 的结果]\n{result}")
+        
+        # 移除搜索标记
+        cleaned_text = re.sub(pattern, '', text).strip()
+        
+        # 拼接搜索结果
+        all_results = "\n\n".join(search_results)
+        
+        return cleaned_text, True, all_results
         
     def initialize(self) -> Dict[str, Any]:
         """初始化访谈"""
@@ -392,7 +476,7 @@ class InterviewAgent:
         return question
     
     def generate_final_persona(self) -> str:
-        """生成最终人设 - 使用完整历史"""
+        """生成最终人设 - 使用完整历史，维度基于访谈大纲"""
         # 使用完整历史而不是当前环节历史
         conversation_summary = "\n".join([
             f"{'用户' if msg['role'] == 'user' else 'AI'}: {msg['content'] if isinstance(msg['content'], str) else msg['content'][0]['text']}"
@@ -401,7 +485,31 @@ class InterviewAgent:
         
         behavior_summary = self.analyzer.get_behavior_summary()
         
-        prompt = f"""基于以下信息，生成一份详细的用户画像（Persona）。
+        # 根据访谈大纲动态生成维度
+        dimensions_text = ""
+        if self.interview_plan:
+            dimensions_text = "\n".join([
+                f"## {i+1}. {section['title']}\n{section['goal']}（2-3句话）\n"
+                for i, section in enumerate(self.interview_plan)
+            ])
+        else:
+            # 降级到默认维度
+            dimensions_text = """## 1. 使用动机与场景
+为什么刷短视频？在什么场景下使用？（2-3句话）
+
+## 2. 内容偏好机制
+喜欢什么类型的内容？评价内容的标准是什么？（2-3句话）
+
+## 3. 创作者关系
+对创作者的依附程度？content-driven 还是 creator-driven？（2-3句话）
+
+## 4. 互动决策逻辑
+什么情况下点赞/评论/分享？互动背后的心理动因？（2-3句话）
+
+## 5. 探索与利用策略
+对熟悉内容 vs 新奇内容的态度？信息茧房倾向？（2-3句话）"""
+        
+        prompt = f"""基于以下信息，生成一份详细的用户画像（Persona），包含行为特征和大五人格评估。
 
 用户短视频行为数据:
 {behavior_summary}
@@ -409,37 +517,41 @@ class InterviewAgent:
 完整访谈对话（所有环节）:
 {conversation_summary}
 
-请生成一份结构化的用户画像，包含以下维度（每个维度2-3句话）：
+请生成一份结构化的用户画像，包含以下部分：
 
-## 📱 使用动机与场景
-- 为什么刷短视频？在什么场景下使用？
+{dimensions_text}
 
-## 🎯 内容偏好机制
-- 喜欢什么类型的内容？评价内容的标准是什么？
+---
 
-## 👤 创作者关系
-- 对创作者的依附程度？content-driven 还是 creator-driven？
+## 🧠 大五人格评估
 
-## 💬 互动决策逻辑
-- 什么情况下点赞/评论/分享？互动背后的心理动因？
+基于访谈和行为数据，评估用户在大五人格维度上的倾向：
 
-## 🔄 探索与利用策略
-- 对熟悉内容 vs 新奇内容的态度？信息茧房倾向？
+### 开放性（Openness）
+**评分**: [1-5分，1=低，5=高]
+**理由**: [基于用户对新内容、新题材的接受度]
 
-## ⏭️ 跳过与停留决策
-- 什么触发"划走"？什么让你继续看？
+### 尽责性（Conscientiousness）
+**评分**: [1-5分]
+**理由**: [基于用户的自律性和时间管理]
 
-## 🎭 情境依赖性
-- 不同时间/心情下的行为差异？
+### 外向性（Extraversion）
+**评分**: [1-5分]
+**理由**: [基于用户的社交和互动倾向]
 
-## 💭 情绪与现实关联
-- 内容对情绪的影响？与现实生活的联系？
+### 宜人性（Agreeableness）
+**评分**: [1-5分]
+**理由**: [基于用户的同理心和信任度]
+
+### 神经质（Neuroticism）
+**评分**: [1-5分]
+**理由**: [基于用户的情绪稳定性]
 
 要求：
-1. 使用第一人称"我"，自然流畅
+1. 行为特征部分使用第一人称"我"，自然流畅
 2. 每个维度具体、有细节，避免空泛
-3. 基于访谈内容和行为数据，不要编造
-4. 总字数400-600字
+3. 大五人格评分要有明确依据，基于访谈和行为数据
+4. 总字数500-800字
 
 直接输出画像，使用 Markdown 格式。"""
         
@@ -457,13 +569,54 @@ class InterviewAgent:
         """获取当前 Persona"""
         return self.current_persona if self.current_persona else "收集中..."
     
+    def extract_big_five_scores(self) -> Dict[str, Any]:
+        """从生成的 Persona 中提取大五人格评分"""
+        if not self.current_persona:
+            return {}
+        
+        # 使用 LLM 从 Persona 文本中提取大五人格评分
+        prompt = f"""从以下用户画像中提取大五人格评分。
+
+用户画像:
+{self.current_persona}
+
+请提取每个维度的评分（1-5分）和简短理由，输出 JSON 格式：
+
+{{
+  "openness": {{"score": 3, "reason": "偏好熟悉内容，较少尝试新类型"}},
+  "conscientiousness": {{"score": 2, "reason": "容易沉迷，时间管理较弱"}},
+  "extraversion": {{"score": 3, "reason": "适度互动，不特别活跃"}},
+  "agreeableness": {{"score": 4, "reason": "容易点赞，信任创作者"}},
+  "neuroticism": {{"score": 3, "reason": "情绪稳定性中等"}}
+}}
+
+只输出 JSON，不要其他内容。"""
+        
+        messages = [
+            SystemMessage(content="你是一个心理学专家，擅长从文本中提取人格特征。"),
+            HumanMessage(content=prompt)
+        ]
+        
+        response = self.llm.invoke(messages)
+        content = response.content.strip()
+        
+        # 提取 JSON
+        json_match = re.search(r'\{.*\}', content, re.DOTALL)
+        if json_match:
+            big_five = json.loads(json_match.group())
+            return big_five
+        
+        return {}
+    
     def get_structured_persona(self) -> Dict[str, Any]:
-        """获取结构化 Persona"""
+        """获取结构化 Persona（包含大五人格）"""
         analysis = self.analyzer.analyze_all()
         interaction = analysis['interaction_patterns']
         creators = analysis['creator_preferences']
         engagement = analysis['engagement_metrics']
+        content_prefs = analysis['content_preferences']
         
+        # 基于行为数据推断的特征
         traits = {}
         
         # 内容 vs 创作者驱动
@@ -486,8 +639,18 @@ class InterviewAgent:
         # 社交敏感度
         traits['social_sensitivity'] = 'high' if engagement.get('prefers_popular') else 'moderate'
         
+        # 提取大五人格评分
+        big_five = self.extract_big_five_scores()
+        
         return {
             "persona_text": self.current_persona,
             "key_traits": traits,
+            "big_five_personality": big_five,
             "interview_turns": self.turn,
+            "behavior_stats": {
+                "like_rate": interaction['like_rate'],
+                "avg_watch_duration": interaction['avg_watch_duration'],
+                "quick_skip_rate": interaction['quick_skip_rate'],
+                "top_categories": content_prefs['top_main_categories'][:3],
+            }
         }
