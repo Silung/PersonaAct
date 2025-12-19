@@ -140,11 +140,25 @@ def create_app(
         
         return chat_history, persona, progress_md, gr.update()
     
-    def export_persona():
+    def export_persona(dataset):
         nonlocal agent
         if not agent:
-            return "{}"
-        return json.dumps(agent.get_structured_persona(), ensure_ascii=False, indent=2)
+            return "{}", "❌ 请先开始访谈"
+        
+        persona_data = agent.get_structured_persona()
+        persona_json = json.dumps(persona_data, ensure_ascii=False, indent=2)
+        
+        # 自动保存到 data/{name}/persona.json
+        save_path = f"data/{dataset}/persona.json"
+        try:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, 'w', encoding='utf-8') as f:
+                f.write(persona_json)
+            save_msg = f"✅ 已保存到 {save_path}"
+        except Exception as e:
+            save_msg = f"❌ 保存失败: {e}"
+        
+        return persona_json, save_msg
     
     def generate_persona_click(chat_history):
         nonlocal agent
@@ -202,7 +216,8 @@ def create_app(
             with gr.Column(scale=1):
                 gr.Markdown("### 🧾 Persona")
                 persona_display = gr.Markdown(value="")
-                export_btn = gr.Button("📤 导出")
+                export_btn = gr.Button("📤 导出并保存")
+                export_status = gr.Markdown(value="")
                 export_output = gr.Code(value="", language="json")
         
         start_btn.click(initialize_interview, inputs=[dataset_selector], outputs=[chatbot, behavior_display, analysis_display, persona_display, progress_display, msg, submit_btn, generate_btn])
@@ -211,7 +226,7 @@ def create_app(
         msg.submit(chat_step, [msg, chatbot], [chatbot, persona_display, progress_display, msg]).then(lambda: "", outputs=[msg])
         submit_btn.click(chat_step, [msg, chatbot], [chatbot, persona_display, progress_display, msg]).then(lambda: "", outputs=[msg])
         generate_btn.click(generate_persona_click, [chatbot], [chatbot, persona_display, msg])
-        export_btn.click(export_persona, outputs=[export_output])
+        export_btn.click(export_persona, inputs=[dataset_selector], outputs=[export_output, export_status])
     
     return demo
 

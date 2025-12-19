@@ -704,6 +704,49 @@ def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str
     print(f"成功分析: {len(results)} 个动作")
 
 
+def load_persona(persona_file: str) -> dict:
+    """加载persona.json文件"""
+    if persona_file and os.path.exists(persona_file):
+        with open(persona_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+def format_persona_for_system_prompt(persona: dict) -> str:
+    """将persona信息格式化为system prompt的一部分"""
+    if not persona:
+        return ""
+    
+    # 提取persona_text（详细的用户画像描述）
+    persona_text = persona.get('persona_text', '')
+    
+    # 提取关键特征
+    key_traits = persona.get('key_traits', {})
+    
+    # 提取大五人格
+    big_five = persona.get('big_five_personality', {})
+    
+    # 构建persona描述
+    persona_description = f"""以下是你的用户画像信息，请根据这些特征来做出符合你个人偏好的行为决策：
+
+{persona_text}
+
+### 关键特征
+- 内容vs创作者偏好: {key_traits.get('content_vs_creator', 'N/A')}
+- 情绪调节倾向: {key_traits.get('emotion_regulation', 'N/A')}
+- 新奇容忍度: {key_traits.get('novelty_tolerance', 'N/A')}
+- 社交敏感度: {key_traits.get('social_sensitivity', 'N/A')}
+
+### 大五人格评分
+- 开放性: {big_five.get('openness', {}).get('score', 'N/A')}/5
+- 尽责性: {big_five.get('conscientiousness', {}).get('score', 'N/A')}/5
+- 外向性: {big_five.get('extraversion', {}).get('score', 'N/A')}/5
+- 宜人性: {big_five.get('agreeableness', {}).get('score', 'N/A')}/5
+- 神经质: {big_five.get('neuroticism', {}).get('score', 'N/A')}/5
+"""
+    return persona_description
+
+
 def prepare_training_data(
     session_data: List[Tuple[str, Dict]], 
     output_file: str,
@@ -711,6 +754,7 @@ def prepare_training_data(
     max_history: int = 3,
     audio_transcript_file: str = None,
     action_reason_file: str = None,
+    persona_file: str = None,
     random_seed: int = 42,
     think: bool = False
 ):
@@ -724,6 +768,7 @@ def prepare_training_data(
         max_history: 最多使用多少条历史记录
         audio_transcript_file: 音频转录结果文件路径
         action_reason_file: 动作原因分析结果文件路径
+        persona_file: persona.json文件路径
         random_seed: 随机种子
         think: 是否使用思考模式
     """
@@ -749,6 +794,12 @@ def prepare_training_data(
             action_reasons = json.load(f)
         print(f"已加载 {len(action_reasons)} 个动作原因分析结果")
     
+    # 加载persona信息
+    persona = load_persona(persona_file)
+    persona_prompt = format_persona_for_system_prompt(persona)
+    if persona_prompt:
+        print(f"已加载persona信息")
+    
     # 第一步：按session划分（10% valid1, 10% test1, 80% 用于进一步划分）
     random.shuffle(session_data)
     total_sessions = len(session_data)
@@ -773,6 +824,7 @@ def prepare_training_data(
             
             # 提取历史截图（每个历史视频只用一张）
             history_screenshots = []
+            str_actions = []
             for hist_action in history_actions:
                 hist_video = hist_action.get('video_path', '').replace('\\', '/')
                 item = hist_action.get('actions', [])
@@ -936,10 +988,53 @@ def prepare_training_data(
                 }
             }
             
+            # 带persona的样本
+            sample_persona = {
+                "images": all_images,
+                "messages": [
+                    {
+                      "role": "system",
+                      "content": f"You are a helpful assistant.\n\n{persona_prompt}" if persona_prompt else "You are a helpful assistant."
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "You are a user who is happily enjoying short videos. "
+                            "You need to analyze the current video interface screenshot and make an appropriate action decision based on what you see. "
+                            "Respond strictly with a Python code block (starting with ```python) calling the following functions:\n"
+                            "```python\n"
+                            "watch(second: float = 2.0) # Continue watching the video\n"
+                            "like() # Give a like to the video\n"
+                            "comment(text: str = \"\") # Leave a comment on the video\n"
+                            "share(who: str = \"\") # share/forward the video to someone\n"
+                            "```\n"
+                            "You can call multiple functions in a single code block to perform multiple actions.\n"
+                            f"{history_placeholder}"
+                            f"Below is the video you are currently browsing:\n{current_video_placeholder}"
+                            f"{audio_placeholder}"
+                        )
+                    },
+                    {
+                        "role": "assistant",
+                        "content": answer
+                    }
+                ],
+                "solution": answer,
+                "metadata": {
+                    "collector": collector,
+                    "session_id": session['session_id'],
+                    "timestamp": action.get('timestamp', ''),
+                    "viewing_duration": action.get('viewing_duration', 0),
+                    "xml_path": xml_path,
+                    "video_path": action.get('video_path', '').replace('\\', '/'),
+                    "audio_path": action.get('audio_path', '').replace('\\', '/')
+                }
+            }
+            
             if think:
-                samples.append(sample_thinking)
+                samples.append((sample_thinking, sample_persona))
             else:
-                samples.append(sample)
+                samples.append((sample, sample_persona))
         
         return samples
     
@@ -950,6 +1045,13 @@ def prepare_training_data(
     train_dataset_all = []
     sft_dataset = []
     
+    # persona数据集
+    persona_valid_dataset = []
+    persona_test_dataset = []
+    persona_train_dataset = []
+    persona_train_dataset_all = []
+    persona_sft_dataset = []
+    
     for collector, session in session_data:
         samples = generate_samples_from_session(collector, session)
         
@@ -959,19 +1061,26 @@ def prepare_training_data(
         num_test = len(samples) // 10
         # 如果样本数 <= 4，全部放入train
         if num_vaild == 0:
-            train_dataset.extend(samples)
-            train_dataset_all.extend(samples)
+            train_dataset.extend([s[0] for s in samples])
+            train_dataset_all.extend([s[0] for s in samples])
+            persona_train_dataset.extend([s[1] for s in samples])
+            persona_train_dataset_all.extend([s[1] for s in samples])
         else:
             last = samples[-(num_vaild + num_test):]
             first = samples[:num_sft_data]
             random.shuffle(last)
             random.shuffle(first)
-            valid_dataset.extend(last[:num_vaild])
-            test_dataset.extend(last[num_vaild:])
+            valid_dataset.extend([s[0] for s in last[:num_vaild]])
+            test_dataset.extend([s[0] for s in last[num_vaild:]])
+            persona_valid_dataset.extend([s[1] for s in last[:num_vaild]])
+            persona_test_dataset.extend([s[1] for s in last[num_vaild:]])
             if first:
-                sft_dataset.extend(first)
-            train_dataset.extend(samples[num_sft_data:-(num_vaild + num_test)])
-            train_dataset_all.extend(samples[:-(num_vaild + num_test)])
+                sft_dataset.extend([s[0] for s in first])
+                persona_sft_dataset.extend([s[1] for s in first])
+            train_dataset.extend([s[0] for s in samples[num_sft_data:-(num_vaild + num_test)]])
+            train_dataset_all.extend([s[0] for s in samples[:-(num_vaild + num_test)]])
+            persona_train_dataset.extend([s[1] for s in samples[num_sft_data:-(num_vaild + num_test)]])
+            persona_train_dataset_all.extend([s[1] for s in samples[:-(num_vaild + num_test)]])
     
     # 保存数据集
     output_path = Path(output_file)
@@ -990,6 +1099,15 @@ def prepare_training_data(
         'test_item': ('test_item', test_dataset)
     }
     
+    # persona数据集映射
+    persona_dataset_file_mapping = {
+        'persona_train': ('train', persona_train_dataset),
+        'persona_train_all': ('train_all', persona_train_dataset_all),
+        'persona_train_sft': ('train_sft', persona_sft_dataset),
+        'persona_valid_item': ('valid_item', persona_valid_dataset),
+        'persona_test_item': ('test_item', persona_test_dataset)
+    }
+    
     total_samples = sum(len(data) for _, data in dataset_file_mapping.values())
     
     print("\n" + "="*60)
@@ -1004,6 +1122,20 @@ def prepare_training_data(
         
         percentage = len(dataset) / total_samples * 100 if total_samples > 0 else 0
         print(f"{display_name:15s}: {output_file_path} ({len(dataset):5d} 样本, {percentage:5.1f}%)")
+    
+    # 保存persona数据集
+    if persona_prompt:
+        print("\n" + "-"*40)
+        print("Persona数据集:")
+        print("-"*40)
+        for display_name, (file_suffix, dataset) in persona_dataset_file_mapping.items():
+            output_file_path = output_path.parent / f"{"thinking_" if think else ""}persona_video_action_{file_suffix}{ext}"
+            with open(output_file_path, 'w', encoding='utf-8') as f:
+                for item in dataset:
+                    f.write(json.dumps(item, ensure_ascii=False) + '\n')
+            
+            percentage = len(dataset) / total_samples * 100 if total_samples > 0 else 0
+            print(f"{display_name:15s}: {output_file_path} ({len(dataset):5d} 样本, {percentage:5.1f}%)")
     
     print(f"\n总样本数: {total_samples}")
     
@@ -1138,6 +1270,7 @@ def main():
             train_output = os.path.join(collector_output_dir, 'video_action_train.jsonl')
             audio_transcript_file = os.path.join(collector_output_dir, 'audio_transcript.json')
             action_reason_file = os.path.join(collector_output_dir, 'action_reason.json')
+            persona_file = os.path.join(collector_output_dir, 'persona.json')
             prepare_training_data(
                 collector_session_data, 
                 train_output,
@@ -1145,6 +1278,7 @@ def main():
                 max_history=args.max_history,
                 audio_transcript_file=audio_transcript_file if os.path.exists(audio_transcript_file) else None,
                 action_reason_file=action_reason_file if os.path.exists(action_reason_file) else None,
+                persona_file=persona_file if os.path.exists(persona_file) else None,
                 random_seed=args.random_seed,
                 think=args.think
             )

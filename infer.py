@@ -73,13 +73,18 @@ def parse_solution_action(solution_str):
     # solution都用code block，摘第一个命令
     return parse_pred_action(solution_str)
 
-def evaluate_dataset(dataset_name, test_file):
+def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False):
     """评估单个数据集"""
     test_file_path = f'data/{dataset_name}/{test_file}'
     
     if not os.path.exists(test_file_path):
         print(f"跳过 {dataset_name}: 测试文件不存在 {test_file_path}")
         return None
+    
+    # 确定输出目录
+    if output_dir is None:
+        output_dir = f'result/{dataset_name}'
+    os.makedirs(output_dir, exist_ok=True)
     
     print(f"\n开始评估数据集: {dataset_name}")
     print(f"测试文件: {test_file_path}")
@@ -148,7 +153,8 @@ def evaluate_dataset(dataset_name, test_file):
     print(f"KL Div   ：{c_kl_div:.4f}  (观看时长分布)")
     
     # 明细可选输出
-    output_detail_file = f'output_infer_eval_detail_{dataset_name}.json'
+    prefix = 'persona_' if is_persona else ''
+    output_detail_file = os.path.join(output_dir, f'{prefix}output_infer_eval_detail_{dataset_name}.json')
     data_out = []
     for i in range(len(y_true)):
         data_out.append({
@@ -174,59 +180,71 @@ def evaluate_dataset(dataset_name, test_file):
 
 # 解析命令行参数
 parser = argparse.ArgumentParser(description='Inference on test dataset')
-parser.add_argument('--dataset', type=str, default=None, 
-                    help='Dataset name (yqg, zsl, etc.). If not specified, test all available datasets')
+parser.add_argument('--name', type=str, default=None, 
+                    help='User name (yqg, zsl, etc.). Only test data/{name}/')
 parser.add_argument('--test_file', type=str, default='video_action_test_item.jsonl',
                     help='Test file name')
+parser.add_argument('--persona', action='store_true',
+                    help='Test persona version of the dataset (persona_video_action_test_item.jsonl)')
 args = parser.parse_args()
 
-# 查找可用的数据集
-available_datasets = []
-if os.path.exists('data'):
-    for name in os.listdir('data'):
-        dataset_path = os.path.join('data', name)
-        if os.path.isdir(dataset_path):
-            test_path = os.path.join(dataset_path, args.test_file)
-            if os.path.exists(test_path):
-                available_datasets.append(name)
+# 如果指定了--persona，修改test_file
+if args.persona and not args.test_file.startswith('persona_'):
+    args.test_file = 'persona_' + args.test_file
 
-if not available_datasets:
+# 确定要测试的数据集
+if args.name:
+    # 指定了name，只测试该用户
+    test_path = os.path.join('data', args.name, args.test_file)
+    if not os.path.exists(test_path):
+        print(f"错误：测试文件不存在 {test_path}")
+        exit(1)
+    datasets_to_test = [args.name]
+else:
+    # 查找所有可用的数据集
+    datasets_to_test = []
+    if os.path.exists('data'):
+        for name in os.listdir('data'):
+            dataset_path = os.path.join('data', name)
+            if os.path.isdir(dataset_path):
+                test_path = os.path.join(dataset_path, args.test_file)
+                if os.path.exists(test_path):
+                    datasets_to_test.append(name)
+    datasets_to_test = sorted(datasets_to_test)
+
+if not datasets_to_test:
     print("未找到任何可用的测试数据集")
     exit(1)
 
-# 确定要测试的数据集
-if args.dataset:
-    if args.dataset not in available_datasets:
-        print(f"错误：指定的数据集 '{args.dataset}' 不存在或没有测试文件")
-        print(f"可用的数据集: {', '.join(available_datasets)}")
-        exit(1)
-    datasets_to_test = [args.dataset]
-else:
-    datasets_to_test = sorted(available_datasets)
-
-print(f"发现可用数据集: {', '.join(available_datasets)}")
 print(f"将测试数据集: {', '.join(datasets_to_test)}")
+print(f"测试文件: {args.test_file}")
 
 # 评估所有数据集
 results = []
+is_persona = args.test_file.startswith('persona_')
+file_type = "Persona" if is_persona else "Normal"
+
 for dataset in datasets_to_test:
-    result = evaluate_dataset(dataset, args.test_file)
+    output_dir = f'result/{dataset}'
+    result = evaluate_dataset(dataset, args.test_file, output_dir=output_dir, is_persona=is_persona)
     if result:
+        result['type'] = file_type
+        result['test_file'] = args.test_file
         results.append(result)
 
 # 汇总结果
-if len(results) > 1:
-    print("\n" + "="*70)
-    print("汇总结果")
-    print("="*70)
+if len(results) > 0:
+    print("\n" + "="*80)
+    print(f"汇总结果 ({file_type})")
+    print("="*80)
     print(f"{'Dataset':<10} {'Samples':<8} {'Type ACC':<10} {'Pearson':<10} {'SMAPE':<10} {'MAE':<10} {'KL Div':<10}")
-    print("-" * 70)
+    print("-" * 80)
     for result in results:
         print(f"{result['dataset']:<10} {result['samples']:<8} {result['type_acc']:<10.4f} "
               f"{result['pearson']:<10.4f} {result['smape']:<10.4f} {result['mae']:<10.4f} "
               f"{result['kl_div']:<10.4f}")
     
-    # 计算平均值（按样本数加权）
+    # 计算加权平均值
     total_samples = sum(r['samples'] for r in results)
     if total_samples > 0:
         weighted_type_acc = sum(r['type_acc'] * r['samples'] for r in results) / total_samples
@@ -235,13 +253,25 @@ if len(results) > 1:
         weighted_mae = sum(r['mae'] * r['samples'] for r in results) / total_samples
         weighted_kl_div = sum(r['kl_div'] * r['samples'] for r in results) / total_samples
         
-        print("-" * 70)
+        print("-" * 80)
         print(f"{'Average':<10} {total_samples:<8} {weighted_type_acc:<10.4f} "
               f"{weighted_pearson:<10.4f} {weighted_smape:<10.4f} {weighted_mae:<10.4f} "
               f"{weighted_kl_div:<10.4f}")
+
+# 保存汇总结果
+if results:
+    # 确定汇总文件的保存目录
+    if args.name:
+        # 如果指定了name，保存到对应目录
+        summary_dir = f'result/{args.name}'
+        os.makedirs(summary_dir, exist_ok=True)
+    else:
+        # 否则保存到result根目录
+        summary_dir = 'result'
+        os.makedirs(summary_dir, exist_ok=True)
     
-    # 保存汇总结果
-    summary_file = 'output_infer_eval_summary.json'
+    prefix = 'persona_' if is_persona else ''
+    summary_file = os.path.join(summary_dir, f'{prefix}output_infer_eval_summary.json')
     with open(summary_file, 'w', encoding='utf8') as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"\n汇总结果已保存到: {summary_file}")
