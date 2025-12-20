@@ -298,20 +298,46 @@ class MainWindow(QMainWindow):
             audio_transcript=None
         )
         
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-        
+        # 收集所有图像
         all_images = []
         if self.ai_history_screenshots:
             all_images.extend(self.ai_history_screenshots[-self.ai_max_history:])
         all_images.append(screenshot_path)
         
+        # 将图像编码为base64并构建消息内容
+        import base64
+        
+        def encode_image(image_path):
+            with open(image_path, "rb") as image_file:
+                return base64.b64encode(image_file.read()).decode('utf-8')
+        
+        # 构建用户消息内容，包含文本和图像
+        user_content = []
+        
+        # 添加文本部分
+        user_content.append({
+            "type": "text",
+            "text": user_prompt
+        })
+        
+        # 添加所有图像
+        for img_path in all_images:
+            base64_image = encode_image(img_path)
+            user_content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{base64_image}"
+                }
+            })
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ]
+        
         response = self.ai_client.chat.completions.create(
             model="qwen",
             messages=messages,
-            images=all_images,
             max_tokens=256,
             temperature=0.0
         )
@@ -344,31 +370,35 @@ class MainWindow(QMainWindow):
             time.sleep(second)
         
         def like():
-            like_x = int(screen_width * 0.95)
-            like_y = int(screen_height * 0.65)
-            tap(like_x, like_y)
-            time.sleep(0.3)
+            # like_x = int(screen_width * 0.95)
+            # like_y = int(screen_height * 0.65)
+            # tap(like_x, like_y)
+            # time.sleep(0.3)
+            self.log_info(f"  → like()")
         
         def comment(text=""):
-            comment_x = int(screen_width * 0.95)
-            comment_y = int(screen_height * 0.75)
-            tap(comment_x, comment_y)
-            time.sleep(0.5)
-            if text:
-                self.u2_device.send_keys(text)
-                time.sleep(0.3)
-                self.u2_device.press("enter")
-                time.sleep(0.5)
-            self.u2_device.press("back")
-            time.sleep(0.3)
+            # comment_x = int(screen_width * 0.95)
+            # comment_y = int(screen_height * 0.75)
+            # tap(comment_x, comment_y)
+            # time.sleep(0.5)
+            # if text:
+            #     self.u2_device.send_keys(text)
+            #     time.sleep(0.3)
+            #     self.u2_device.press("enter")
+            #     time.sleep(0.5)
+            # self.u2_device.press("back")
+            # time.sleep(0.3)
+            self.log_info(f"  → comment({text})")
+
         
         def share(who=""):
-            share_x = int(screen_width * 0.95)
-            share_y = int(screen_height * 0.85)
-            tap(share_x, share_y)
-            time.sleep(0.5)
-            self.u2_device.press("back")
-            time.sleep(0.3)
+            # share_x = int(screen_width * 0.95)
+            # share_y = int(screen_height * 0.85)
+            # tap(share_x, share_y)
+            # time.sleep(0.5)
+            # self.u2_device.press("back")
+            # time.sleep(0.3)
+            self.log_info(f"  → share({who})")
         
         local_vars = {
             'tap': tap,
@@ -413,24 +443,33 @@ class MainWindow(QMainWindow):
         self.audio_buffer = []
         
         def _write_files():
+            # 关闭视频writer
             if video_writer:
-                video_writer.release()
-                if save_files and video_path and video_path.exists():
-                    video_size = video_path.stat().st_size / 1024
-                    self.log_info(f"✅ 视频: {video_path.name} ({frame_count}帧, {video_size:.1f}KB)")
-                elif not save_files and video_path and video_path.exists():
-                    video_path.unlink()
+                try:
+                    video_writer.release()
+                    if save_files and video_path and video_path.exists():
+                        video_size = video_path.stat().st_size / 1024
+                        self.log_info(f"✅ 视频: {video_path.name} ({frame_count}帧, {video_size:.1f}KB)")
+                    elif not save_files and video_path and video_path.exists():
+                        # 不保存时删除文件
+                        video_path.unlink()
+                except Exception as e:
+                    self.log_info(f"⚠️ 视频保存失败: {e}")
             
+            # 写入音频
             if save_files and audio_data and audio_path:
-                with wave.open(str(audio_path), 'wb') as wav_file:
-                    wav_file.setnchannels(self.audio_channels)
-                    wav_file.setsampwidth(2)
-                    wav_file.setframerate(self.audio_sample_rate)
-                    for data in audio_data:
-                        wav_file.writeframes(data)
-                
-                audio_size = audio_path.stat().st_size / 1024
-                self.log_info(f"✅ 音频: {audio_path.name} ({audio_size:.1f}KB)")
+                try:
+                    with wave.open(str(audio_path), 'wb') as wav_file:
+                        wav_file.setnchannels(self.audio_channels)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(self.audio_sample_rate)
+                        for data in audio_data:
+                            wav_file.writeframes(data)
+                    
+                    audio_size = audio_path.stat().st_size / 1024
+                    self.log_info(f"✅ 音频: {audio_path.name} ({audio_size:.1f}KB)")
+                except Exception as e:
+                    self.log_info(f"⚠️ 音频保存失败: {e}")
         
         threading.Thread(target=_write_files, daemon=True).start()
         
@@ -513,8 +552,10 @@ class MainWindow(QMainWindow):
                 self.last_display_size = current_size
                 self.window_size_initialized = True
             
+            # 如果正在录制，直接写入视频文件
             if self.is_recording:
-                if self.video_writer is None and self.current_video_path:
+                if self.video_writer is None:
+                    # 第一帧到来时初始化VideoWriter
                     height, width = frame.shape[:2]
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                     self.video_writer = cv2.VideoWriter(
@@ -523,6 +564,12 @@ class MainWindow(QMainWindow):
                         self.video_fps, 
                         (width, height)
                     )
+                    if self.video_writer.isOpened():
+                        self.log_info(f"✅ VideoWriter初始化成功 ({width}x{height})")
+                    else:
+                        self.log_info(f"⚠️ VideoWriter初始化失败")
+                        self.video_writer = None
+                        return
                 
                 if self.video_writer:
                     self.video_writer.write(frame)

@@ -1,7 +1,6 @@
 uiautomator2
 PySide6
 adbutils
-scrcpy-client
 numpy
 pyaudio
 opencv-python
