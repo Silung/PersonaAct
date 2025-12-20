@@ -131,6 +131,28 @@ class Ui_MainWindow(object):
         
         self.config_layout.addWidget(self.output_group)
         
+        # 调试组
+        self.debug_group = QGroupBox("调试选项")
+        self.debug_group.setObjectName("debug_group")
+        self.debug_layout = QVBoxLayout(self.debug_group)
+        
+        # 指针位置显示按钮
+        self.button_toggle_pointer = QPushButton("显示指针位置")
+        self.button_toggle_pointer.setObjectName("button_toggle_pointer")
+        self.button_toggle_pointer.setCheckable(True)
+        self.button_toggle_pointer.setStyleSheet("""
+            QPushButton {
+                background-color: #607D8B;
+                color: white;
+            }
+            QPushButton:checked {
+                background-color: #FF5722;
+            }
+        """)
+        self.debug_layout.addWidget(self.button_toggle_pointer)
+        
+        self.config_layout.addWidget(self.debug_group)
+        
         # 日志显示
         self.log_group = QGroupBox("运行日志")
         self.log_group.setObjectName("log_group")

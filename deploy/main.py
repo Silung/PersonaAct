@@ -13,12 +13,14 @@ import wave
 import re
 
 import pyaudio
+import logging
 from adbutils import adb
-from PySide6.QtGui import QImage, QPixmap, Qt
+from PySide6.QtGui import QImage, QKeyEvent, QMouseEvent, QPixmap, Qt
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog
 from PySide6.QtCore import QTimer, QSize
 from ui_main import Ui_MainWindow
 from pathlib import Path
+from adb_utils import ADBUtils
 
 import scrcpy
 
@@ -52,6 +54,9 @@ class MainWindow(QMainWindow):
         
         self.u2_device = u2.connect(self.device.serial)
         self.log_info(f"已连接到uiautomator2设备: {self.device.serial}")
+        
+        # ADB工具
+        self.adb_utils = ADBUtils(device_serial=self.device.serial, logger=logging.getLogger(__name__))
         
         # AI交互相关
         self.ai_client = None
@@ -120,6 +125,12 @@ class MainWindow(QMainWindow):
         self.ui.combo_device.currentTextChanged.connect(self.choose_device)
         self.ui.flip.stateChanged.connect(self.on_flip)
         self.ui.persona_select.currentTextChanged.connect(self.on_persona_changed)
+        self.ui.button_toggle_pointer.clicked.connect(self.toggle_pointer_location)
+        
+        # Bind mouse event for controlling device
+        self.ui.label.mousePressEvent = self.on_mouse_event(scrcpy.ACTION_DOWN)
+        self.ui.label.mouseMoveEvent = self.on_mouse_event(scrcpy.ACTION_MOVE)
+        self.ui.label.mouseReleaseEvent = self.on_mouse_event(scrcpy.ACTION_UP)
 
     def log_info(self, message):
         msg = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}"
@@ -426,9 +437,15 @@ class MainWindow(QMainWindow):
         return True
 
     def stop_recording(self, save_files=True):
+        """停止录制并异步写入音频
+        
+        Args:
+            save_files: 是否保存文件。False时直接丢弃，不保存到磁盘
+        """
         if not self.is_recording:
             return None, None
         
+        # 先设置标志，阻止新的写入
         self.is_recording = False
         self.is_audio_recording = False
         
@@ -438,6 +455,7 @@ class MainWindow(QMainWindow):
         audio_data = self.audio_buffer.copy() if save_files else []
         video_writer = self.video_writer
         
+        # 清空引用，防止on_frame继续写入
         self.video_writer = None
         self.video_frame_count = 0
         self.audio_buffer = []
@@ -449,7 +467,7 @@ class MainWindow(QMainWindow):
                     video_writer.release()
                     if save_files and video_path and video_path.exists():
                         video_size = video_path.stat().st_size / 1024
-                        self.log_info(f"✅ 视频: {video_path.name} ({frame_count}帧, {video_size:.1f}KB)")
+                        self.log_info(f"✅ 视频: {video_path.name} ({frame_count}帧, {self.video_fps}fps, {video_size:.1f}KB)")
                     elif not save_files and video_path and video_path.exists():
                         # 不保存时删除文件
                         video_path.unlink()
@@ -508,6 +526,9 @@ class MainWindow(QMainWindow):
             
         self.device = adb.device(serial=device)
         self.u2_device = u2.connect(device)
+        # 更新ADB工具的设备序列号
+        if hasattr(self, 'adb_utils'):
+            self.adb_utils = ADBUtils(device_serial=device, logger=logging.getLogger(__name__))
         self.log_info(f"已连接到设备: {device}")
 
     def list_devices(self):
@@ -518,6 +539,73 @@ class MainWindow(QMainWindow):
 
     def on_flip(self, _):
         self.client.flip = self.ui.flip.isChecked()
+
+    def toggle_pointer_location(self):
+        """切换指针位置显示"""
+        is_enabled = self.ui.button_toggle_pointer.isChecked()
+        success = self.adb_utils.toggle_pointer_location(is_enabled)
+        
+        if success:
+            status = "开启" if is_enabled else "关闭"
+            self.log_info(f"指针位置显示已{status}")
+            self.ui.button_toggle_pointer.setText(f"{'关闭' if is_enabled else '显示'}指针位置")
+        else:
+            self.log_info("指针位置设置失败")
+            self.ui.button_toggle_pointer.setChecked(not is_enabled)
+
+    def on_mouse_event(self, action=scrcpy.ACTION_DOWN):
+        """处理鼠标事件并转换为设备触摸事件"""
+        def handler(evt: QMouseEvent):
+            # 清除输入框焦点，避免干扰
+            focused_widget = QApplication.focusWidget()
+            if focused_widget is not None:
+                focused_widget.clearFocus()
+            
+            # 获取当前显示的图片尺寸和设备真实尺寸
+            device_width, device_height = self.client.resolution
+            pixmap = self.ui.label.pixmap()
+            
+            if pixmap:
+                # 获取label的实际尺寸
+                label_width = self.ui.label.width()
+                label_height = self.ui.label.height()
+                
+                # 获取图片的显示尺寸
+                pixmap_width = pixmap.width()
+                pixmap_height = pixmap.height()
+                
+                # 计算图片在label中的偏移量（居中显示）
+                offset_x = max(0, (label_width - pixmap_width) / 2)
+                offset_y = max(0, (label_height - pixmap_height) / 2)
+                
+                # 获取鼠标在label中的位置
+                mouse_x = evt.position().x()
+                mouse_y = evt.position().y()
+                
+                # 减去偏移量，得到鼠标在图片上的实际位置
+                image_x = mouse_x - offset_x
+                image_y = mouse_y - offset_y
+                
+                # 确保坐标在图片范围内
+                if 0 <= image_x <= pixmap_width and 0 <= image_y <= pixmap_height:
+                    # 计算缩放比例并转换坐标
+                    ratio_x = device_width / pixmap_width
+                    ratio_y = device_height / pixmap_height
+                    touch_x = image_x * ratio_x
+                    touch_y = image_y * ratio_y
+                else:
+                    # 点击在图片外，不处理
+                    return
+            else:
+                # 回退到原来的计算方式
+                ratio = self.max_width / max(self.client.resolution)
+                touch_x = evt.position().x() / ratio
+                touch_y = evt.position().y() / ratio
+            
+            # 通过scrcpy控制发送触摸事件到设备
+            self.client.control.touch(touch_x, touch_y, action)
+
+        return handler
 
     def on_init(self):
         self.setWindowTitle(f"Persona视频交互系统 - {self.client.device_name}")
