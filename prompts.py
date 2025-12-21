@@ -11,9 +11,6 @@ def format_persona_for_system_prompt(persona: dict) -> str:
     # 提取关键特征
     key_traits = persona.get('key_traits', {})
     
-    # 提取大五人格
-    big_five = persona.get('big_five_personality', {})
-    
     # 构建persona描述
     persona_description = f"""以下是你的用户画像信息，请根据这些特征来做出符合你个人偏好的行为决策：
 
@@ -24,13 +21,6 @@ def format_persona_for_system_prompt(persona: dict) -> str:
 - 情绪调节倾向: {key_traits.get('emotion_regulation', 'N/A')}
 - 新奇容忍度: {key_traits.get('novelty_tolerance', 'N/A')}
 - 社交敏感度: {key_traits.get('social_sensitivity', 'N/A')}
-
-### 大五人格评分
-- 开放性: {big_five.get('openness', {}).get('score', 'N/A')}/5
-- 尽责性: {big_five.get('conscientiousness', {}).get('score', 'N/A')}/5
-- 外向性: {big_five.get('extraversion', {}).get('score', 'N/A')}/5
-- 宜人性: {big_five.get('agreeableness', {}).get('score', 'N/A')}/5
-- 神经质: {big_five.get('neuroticism', {}).get('score', 'N/A')}/5
 """
     return persona_description
 
@@ -48,14 +38,14 @@ def get_system_prompt(use_persona: bool = False, persona: dict = None) -> str:
 
 
 def get_user_prompt(history_screenshots: list = None, history_actions: list = None, 
-                    current_screenshot: str = None, audio_transcript: str = None) -> str:
+                    current_screenshots: list = None, audio_transcript: str = None) -> str:
     """
     获取user prompt，与训练时完全一致
     
     Args:
         history_screenshots: 历史截图路径列表（每个历史视频一张）
         history_actions: 历史动作的代码字符串列表
-        current_screenshot: 当前视频截图路径
+        current_screenshots: 当前视频截图路径列表（支持多张）
         audio_transcript: 音频转录文本（可选）
     """
     # 构建历史提示
@@ -70,8 +60,11 @@ def get_user_prompt(history_screenshots: list = None, history_actions: list = No
     if audio_transcript:
         audio_placeholder = f"\nVideo audio transcript:\n{audio_transcript}"
     
-    # 构建当前视频提示
-    current_video_placeholder = "<image>" if current_screenshot else ""
+    # 构建当前视频提示（支持多张截图）
+    if current_screenshots:
+        current_video_placeholder = "<image>" * len(current_screenshots)
+    else:
+        current_video_placeholder = ""
     
     # 构建完整的user prompt（与训练时完全一致）
     user_prompt = (

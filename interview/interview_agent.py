@@ -31,14 +31,16 @@ class InterviewAgent:
 访谈原则：
 1. **严格按照环节提问并主动结束，避免重复提问**：
    - 当前环节会明确告诉你环节目标和关键问题方向
-   - **在提问前，必须检查完整对话历史，如果某个问题已经在之前的环节问过并得到回答，不要重复提问**
+   - **系统会提供"已问过的问题列表"，你必须仔细检查这个列表**
+   - **在提问前，必须检查已问过的问题列表和完整对话历史，如果某个问题已经在之前的环节问过并得到回答，不要重复提问**
+   - **必须提出与已问过的问题明显不同的新问题**，如果无法提出新问题，请立即结束当前环节
    - 只能问与当前环节相关的问题，不要问其他环节的问题
    - **个人信息环节特别说明**：
      * ✅ 只能问：年龄范围、职业类型、生活状态（如学生、上班族等）
      * ❌ 禁止问：地址、城市、姓名、联系方式等敏感信息（匿名化要求）
      * ❌ 禁止问：内容喜好、使用场景、观看习惯等其他环节的问题
      * **一旦收集到年龄、职业、生活状态这三个基本信息，立即结束环节**
-   - **如果已经收集到当前环节的主要信息（覆盖了关键问题方向），必须立即主动结束当前环节，不要继续问重复或无关的问题**
+   - **如果已经收集到当前环节的主要信息（覆盖了关键问题方向），或者无法提出与已问过的问题明显不同的新问题，必须立即主动结束当前环节，不要继续问重复或无关的问题**
 
 2. **基于数据提问（Data-Driven）**：
    - 必须基于用户的真实行为数据提问
@@ -115,6 +117,7 @@ class InterviewAgent:
         self.full_history: List[Dict[str, str]] = []  # 完整历史（所有环节）
         self.interview_plan: List[Dict[str, Any]] = []
         self.current_section = 0
+        self.asked_questions: List[str] = []  # 已问过的问题列表
         
         # 搜索工具
         self.ddgs = DDGS() if SEARCH_AVAILABLE else None
@@ -184,6 +187,7 @@ class InterviewAgent:
         self.full_history = []
         self.current_section = 0
         self.section_turn = 0
+        self.asked_questions = []  # 重置已问过的问题列表
         
         behavior_summary = self.analyzer.get_behavior_summary()
         analysis = self.analyzer.analyze_all()
@@ -340,6 +344,16 @@ class InterviewAgent:
         
         video_context = "\n".join(video_examples) if video_examples else ""
         
+        # 生成已问过的问题列表（用于避免重复）
+        asked_questions_text = ""
+        if self.asked_questions:
+            asked_questions_text = f"""
+📋 **已问过的问题列表（请避免重复或相似的问题）**：
+{chr(10).join([f"{i+1}. {q}" for i, q in enumerate(self.asked_questions)])}
+
+⚠️ **重要**：请仔细检查上述问题列表。如果当前环节的关键问题方向已经通过这些问题得到了充分了解，或者你无法提出与上述问题**明显不同**的新问题，请在回复最后一行输出 "NEXT_SECTION" 来结束当前环节。
+"""
+        
         current_section_info = ""
         if self.interview_plan and self.current_section < len(self.interview_plan):
             section = self.interview_plan[self.current_section]
@@ -348,24 +362,31 @@ class InterviewAgent:
 环节目标: {section['goal']}
 关键问题方向: {', '.join(section['key_questions'])}
 
+{asked_questions_text}
+
 ⚠️ **重要约束**：
 1. **必须严格按照当前环节的目标和关键问题方向提问**，不要问其他环节的问题
-2. **在提问前，必须检查完整对话历史**，如果某个问题已经在之前的环节问过并得到回答，不要重复提问
-3. 当前环节是"{section['title']}"，只能问与"{section['goal']}"相关的问题
-4. **如果当前环节是"个人信息"**：
+2. **在提问前，必须检查已问过的问题列表和完整对话历史**，如果某个问题已经在之前的环节问过并得到回答，不要重复提问
+3. **必须提出与已问过的问题明显不同的新问题**，如果无法提出新问题，请结束当前环节
+4. 当前环节是"{section['title']}"，只能问与"{section['goal']}"相关的问题
+5. **如果当前环节是"个人信息"**：
    - ✅ 只能问：年龄范围、职业类型、生活状态（如学生、上班族、自由职业等）
    - ❌ 禁止问：地址、具体城市、姓名、联系方式等敏感信息
    - ❌ 禁止问：内容喜好、使用场景、观看习惯等其他环节的问题
    - **一旦收集到年龄、职业、生活状态这三个基本信息，立即结束环节**
-5. **如果当前环节是"内容喜好"**，才能问喜欢什么类型的内容、为什么喜欢等
-6. 当前环节轮数: {self.section_turn}/{section['max_turns']}
+6. **如果当前环节是"内容喜好"**，才能问喜欢什么类型的内容、为什么喜欢等
+7. 当前环节轮数: {self.section_turn}/{section['max_turns']}
 
 🎯 **主动结束环节（非常重要）**：
 - **如果已经收集到当前环节的主要信息（覆盖了关键问题方向：{', '.join(section['key_questions'])}），必须立即主动结束当前环节**
+- **如果无法提出与已问过的问题明显不同的新问题，必须立即结束当前环节**
 - 特别是"个人信息"环节：一旦收集到年龄、职业、生活状态，立即结束，不要问其他问题
 - 不要等到达到最大轮数才结束，也不要问重复或无关的问题
-- 如果已经收集到足够信息，请在回复最后一行输出 "NEXT_SECTION" 来结束当前环节
-- 判断标准：是否已经了解了关键问题方向中的主要信息？如果是，就立即结束
+- 如果已经收集到足够信息或无法提出新问题，请在回复最后一行输出 "NEXT_SECTION" 来结束当前环节
+- 判断标准：
+  1. 是否已经了解了关键问题方向中的主要信息？
+  2. 是否还能提出与已问过的问题明显不同的新问题？
+  如果两个问题的答案都是"否"，就立即结束
 """
         
         system_content = f"""{self.SYSTEM_PROMPT}
@@ -397,6 +418,41 @@ class InterviewAgent:
         response = self.llm.invoke(messages)
         result = response.content.strip()
         
+        # 提取问题（如果回复中包含问题）
+        # 尝试从回复中提取问题：通常是第一句话或问号结尾的句子
+        question = None
+        if "?" in result or "？" in result:
+            # 提取第一个问句
+            lines = result.split('\n')
+            for line in lines:
+                line = line.strip()
+                # 跳过空行和标记行
+                if not line or "NEXT_SECTION" in line:
+                    continue
+                if ("?" in line or "？" in line) and len(line) > 5:
+                    # 提取问号前的部分作为问题
+                    question = line.rstrip('?？。！').strip()
+                    break
+            # 如果没有找到，尝试提取第一行（可能是问题但没有问号）
+            if not question and lines:
+                first_line = lines[0].strip()
+                # 跳过标记行
+                if "NEXT_SECTION" not in first_line and len(first_line) > 5:
+                    question = first_line.rstrip('。！').strip()
+        else:
+            # 即使没有问号，如果回复很短且像问题，也尝试提取
+            lines = result.split('\n')
+            if lines:
+                first_line = lines[0].strip()
+                # 跳过标记行
+                if "NEXT_SECTION" not in first_line and len(first_line) > 5 and len(first_line) < 100:
+                    # 如果第一行很短，可能是问题
+                    question = first_line.rstrip('。！').strip()
+        
+        # 如果提取到问题，保存到已问过的问题列表
+        if question and question not in self.asked_questions:
+            self.asked_questions.append(question)
+        
         # 检查是否包含 [NEXT_SECTION] 标记或达到最大轮数
         section_changed = False
         auto_ended = False
@@ -426,7 +482,8 @@ class InterviewAgent:
                 # 还有下一个环节
                 self.current_section += 1
                 self.section_turn = 0
-                # 清空当前环节历史，但保留完整历史
+                # 清空当前环节历史，但保留完整历史和已问过的问题列表
+                # 注意：不重置asked_questions，因为跨环节也可能有相似问题
                 self.chat_history = []
             else:
                 # 已经是最后一个环节，访谈完成
@@ -493,6 +550,9 @@ class InterviewAgent:
         
         response = self.llm.invoke(messages)
         question = response.content.strip()
+        # 保存第一个问题到已问过的问题列表
+        if question and question not in self.asked_questions:
+            self.asked_questions.append(question)
         self.chat_history.append({"role": "assistant", "content": question})
         self.full_history.append({"role": "assistant", "content": question})
         # 初始化 section_turn
@@ -507,6 +567,16 @@ class InterviewAgent:
         behavior_summary = self.analyzer.get_behavior_summary()
         current_section = self.interview_plan[self.current_section]
         
+        # 生成已问过的问题列表（用于避免重复）
+        asked_questions_text = ""
+        if self.asked_questions:
+            asked_questions_text = f"""
+📋 **已问过的问题列表（请避免重复或相似的问题）**：
+{chr(10).join([f"{i+1}. {q}" for i, q in enumerate(self.asked_questions)])}
+
+⚠️ **重要**：请仔细检查上述问题列表，确保新问题与已问过的问题明显不同。
+"""
+        
         messages = [
             SystemMessage(content=self.SYSTEM_PROMPT),
             HumanMessage(content=f"""现在进入新的访谈环节。
@@ -515,6 +585,7 @@ class InterviewAgent:
 环节目标: {current_section['goal']}
 关键问题方向: {', '.join(current_section['key_questions'])}
 
+{asked_questions_text}
 用户短视频行为数据摘要:
 {behavior_summary}
 
@@ -522,12 +593,16 @@ class InterviewAgent:
 1. 开放式深度提问
 2. 自然友好，像朋友聊天
 3. 不超过80字
+4. 确保与已问过的问题明显不同
 
 只输出问题。""")
         ]
         
         response = self.llm.invoke(messages)
         question = response.content.strip()
+        # 保存问题到已问过的问题列表
+        if question and question not in self.asked_questions:
+            self.asked_questions.append(question)
         self.chat_history.append({"role": "assistant", "content": question})
         self.full_history.append({"role": "assistant", "content": question})
         # 更新 section_turn，因为这是新环节的第一个问题
@@ -574,9 +649,17 @@ class InterviewAgent:
 5. **避免空泛**：不要写"一般"、"通常"、"可能"等模糊词汇，不要写"我喜欢看视频"、"我会点赞"等无信息量的套话
 6. **一段话**：写成一段连贯的话，不要分点、不要用Markdown格式，直接输出文本
 7. **字数**：300-500字，确保信息密度高
+8. **⚠️ 重要：不要使用具体数据**：
+   - ❌ 禁止使用：具体数字（如"点赞率30%"、"观看5次"、"15-20分钟"、"10秒"等）
+   - ❌ 禁止使用：百分比、次数、时长等精确数值
+   - ✅ 应该使用：描述性语言（如"点赞率较高/较低"、"经常/偶尔观看"、"观看时间较长/较短"、"很快划走"等）
+   - ✅ 应该使用：程度词（如"特别"、"比较"、"偶尔"、"经常"、"很少"等）
 
 **示例（好的写法）**：
-"我是一名25-30岁的互联网产品经理，平时工作压力较大，主要在通勤路上和睡前刷短视频。我特别喜欢知识类内容，尤其是产品分析、商业案例和编程教程，经常关注'产品经理老王'和'商业洞察'这两个创作者，因为他们的内容既有深度又实用，能帮助我提升工作能力。我平均每次观看15-20分钟，当看到有价值的知识类视频时会完整看完并点赞，点赞率约30%，而纯娱乐类视频我通常只看前10秒就划走。我很少评论，但会收藏一些特别有用的内容。相比热门内容，我更关注内容质量，即使作者粉丝不多，只要内容好我也会看完。"
+"我是一名25-30岁的互联网产品经理，平时工作压力较大，主要在通勤路上和睡前刷短视频。我特别喜欢知识类内容，尤其是产品分析、商业案例和编程教程，经常关注'产品经理老王'和'商业洞察'这两个创作者，因为他们的内容既有深度又实用，能帮助我提升工作能力。我每次观看时间都比较长，当看到有价值的知识类视频时会完整看完并点赞，点赞频率比较高，而纯娱乐类视频我通常只看几秒就划走。我很少评论，但会收藏一些特别有用的内容。相比热门内容，我更关注内容质量，即使作者粉丝不多，只要内容好我也会看完。"
+
+**示例（错误的写法 - 包含具体数据）**：
+"我点赞率约30%，平均每次观看15-20分钟，喜欢某类内容5次..." ❌
 
 直接输出自述文本，不要其他格式。"""
         

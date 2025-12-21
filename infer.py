@@ -7,8 +7,6 @@ from tqdm import tqdm
 from openai import OpenAI
 from scipy.stats import pearsonr, entropy
 
-client = OpenAI(base_url="http://127.0.0.1:8012/v1", api_key="1234567890")
-
 # SMAPE 实现
 def smape(y_true, y_pred, eps=1e-8):
     """Symmetric Mean Absolute Percentage Error"""
@@ -81,32 +79,12 @@ def load_persona(persona_file: str) -> dict:
     return {}
 
 
-def format_persona_for_system_prompt(persona: dict) -> str:
-    """将persona信息格式化为system prompt的一部分"""
-    if not persona:
-        return ""
-    
-    # 提取persona_text（详细的用户画像描述）
-    persona_text = persona.get('persona_text', '')
-    
-    # 提取关键特征
-    key_traits = persona.get('key_traits', {})
-    
-    # 构建persona描述（注意：prepare_data.py中还有big_five，但我们已经移除了，所以这里不包含）
-    persona_description = f"""以下是你的用户画像信息，请根据这些特征来做出符合你个人偏好的行为决策：
-
-{persona_text}
-
-### 关键特征
-- 内容vs创作者偏好: {key_traits.get('content_vs_creator', 'N/A')}
-- 情绪调节倾向: {key_traits.get('emotion_regulation', 'N/A')}
-- 新奇容忍度: {key_traits.get('novelty_tolerance', 'N/A')}
-- 社交敏感度: {key_traits.get('social_sensitivity', 'N/A')}
-"""
-    return persona_description
+# 从 prompts.py 导入统一的 prompt 函数
+from prompts import get_system_prompt, get_user_prompt
 
 
-def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False, persona_file=None):
+def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False, persona_file=None, 
+                     api_base="http://127.0.0.1:8012/v1", api_key="1234567890", model="qwen"):
     """评估单个数据集"""
     test_file_path = f'data/{dataset_name}/{test_file}'
     
@@ -119,13 +97,14 @@ def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False,
         output_dir = f'result/{dataset_name}'
     os.makedirs(output_dir, exist_ok=True)
     
+    # 初始化 OpenAI client
+    client = OpenAI(base_url=api_base, api_key=api_key)
+    
     # 加载persona信息（如果指定了persona_file）
     persona = {}
-    persona_prompt = ""
     if persona_file:
         persona = load_persona(persona_file)
-        persona_prompt = format_persona_for_system_prompt(persona)
-        if persona_prompt:
+        if persona:
             print(f"已加载persona信息: {persona_file}")
     
     print(f"\n开始评估数据集: {dataset_name}")
@@ -149,17 +128,18 @@ def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False,
         if messages[-1]['role'] == 'assistant':
             messages = messages[:-1]
         
-        # 如果提供了persona，将persona信息添加到system message
-        if persona_prompt:
+        # 如果提供了persona，使用统一的 system prompt 函数
+        if persona:
+            # 使用 prompts.py 中的统一函数生成 system prompt
+            system_content = get_system_prompt(use_persona=True, persona=persona)
             if messages and messages[0]['role'] == 'system':
-                # 如果已有system message，追加persona信息
-                original_system = messages[0]['content']
-                messages[0]['content'] = f"{original_system}\n\n{persona_prompt}"
+                # 如果已有system message，替换为统一的格式
+                messages[0]['content'] = system_content
             else:
                 # 如果没有system message，创建一个新的
                 messages.insert(0, {
                     "role": "system",
-                    "content": f"You are a helpful assistant.\n\n{persona_prompt}"
+                    "content": system_content
                 })
         
         gt_type, gt_value = parse_solution_action(item['solution'])
@@ -169,7 +149,7 @@ def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False,
         # 调用vllm
         try:
             completion = client.chat.completions.create(
-                model="qwen",
+                model=model,
                 messages=messages,
                 max_tokens=256,
                 temperature=0.0
@@ -244,6 +224,12 @@ parser.add_argument('--test_file', type=str, default='video_action_test_item.jso
                     help='Test file name')
 parser.add_argument('--persona', action='store_true',
                     help='Test persona version of the dataset (persona_video_action_test_item.jsonl)')
+parser.add_argument('--api_base', type=str, default='http://127.0.0.1:8012/v1',
+                    help='API base URL (default: http://127.0.0.1:8012/v1)')
+parser.add_argument('--api_key', type=str, default='1234567890',
+                    help='API key (default: 1234567890)')
+parser.add_argument('--model', type=str, default='qwen',
+                    help='Model name (default: qwen)')
 args = parser.parse_args()
 
 # 如果指定了--persona，修改test_file
@@ -294,7 +280,16 @@ for dataset in datasets_to_test:
             print(f"警告: persona文件不存在 {persona_file}，将不使用persona信息")
             persona_file = None
     
-    result = evaluate_dataset(dataset, args.test_file, output_dir=output_dir, is_persona=is_persona, persona_file=persona_file)
+    result = evaluate_dataset(
+        dataset, 
+        args.test_file, 
+        output_dir=output_dir, 
+        is_persona=is_persona, 
+        persona_file=persona_file,
+        api_base=args.api_base,
+        api_key=args.api_key,
+        model=args.model
+    )
     if result:
         result['type'] = file_type
         result['test_file'] = args.test_file

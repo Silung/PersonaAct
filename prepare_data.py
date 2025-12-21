@@ -8,6 +8,7 @@ from openai import OpenAI
 import concurrent.futures
 from tqdm import tqdm
 from typing import List, Dict, Tuple
+from prompts import get_system_prompt, get_user_prompt
 
 
 client = OpenAI(
@@ -712,41 +713,6 @@ def load_persona(persona_file: str) -> dict:
     return {}
 
 
-def format_persona_for_system_prompt(persona: dict) -> str:
-    """将persona信息格式化为system prompt的一部分"""
-    if not persona:
-        return ""
-    
-    # 提取persona_text（详细的用户画像描述）
-    persona_text = persona.get('persona_text', '')
-    
-    # 提取关键特征
-    key_traits = persona.get('key_traits', {})
-    
-    # 提取大五人格
-    big_five = persona.get('big_five_personality', {})
-    
-    # 构建persona描述
-    persona_description = f"""以下是你的用户画像信息，请根据这些特征来做出符合你个人偏好的行为决策：
-
-{persona_text}
-
-### 关键特征
-- 内容vs创作者偏好: {key_traits.get('content_vs_creator', 'N/A')}
-- 情绪调节倾向: {key_traits.get('emotion_regulation', 'N/A')}
-- 新奇容忍度: {key_traits.get('novelty_tolerance', 'N/A')}
-- 社交敏感度: {key_traits.get('social_sensitivity', 'N/A')}
-
-### 大五人格评分
-- 开放性: {big_five.get('openness', {}).get('score', 'N/A')}/5
-- 尽责性: {big_five.get('conscientiousness', {}).get('score', 'N/A')}/5
-- 外向性: {big_five.get('extraversion', {}).get('score', 'N/A')}/5
-- 宜人性: {big_five.get('agreeableness', {}).get('score', 'N/A')}/5
-- 神经质: {big_five.get('neuroticism', {}).get('score', 'N/A')}/5
-"""
-    return persona_description
-
-
 def prepare_training_data(
     session_data: List[Tuple[str, Dict]], 
     output_file: str,
@@ -796,8 +762,7 @@ def prepare_training_data(
     
     # 加载persona信息
     persona = load_persona(persona_file)
-    persona_prompt = format_persona_for_system_prompt(persona)
-    if persona_prompt:
+    if persona:
         print(f"已加载persona信息")
     
     # 第一步：按session划分（10% valid1, 10% test1, 80% 用于进一步划分）
@@ -869,14 +834,6 @@ def prepare_training_data(
             if audio_path in audio_transcripts:
                 audio_text = audio_transcripts[audio_path].get('text', '')
             
-            # 构建音频文本提示
-            audio_placeholder = ""
-            if audio_text:
-                audio_placeholder = f"\nVideo audio transcript:\n{audio_text}"
-            
-            # 构建当前视频提示（多张图片）
-            current_video_placeholder = "<image>" * len(current_screenshots)
-            
             # 构建动作标签（用于监督学习）
             user_actions = action.get('actions', [])
             answer = '```python\n'
@@ -891,30 +848,24 @@ def prepare_training_data(
                     answer += f"share({act['text']})\n"
             answer += '```'
             
+            # 使用 prompts.py 中的函数生成 user prompt
+            user_prompt = get_user_prompt(
+                history_screenshots=selected_history,
+                history_actions=str_actions if selected_history else None,
+                current_screenshots=current_screenshots,
+                audio_transcript=audio_text
+            )
+            
             sample = {
                 "images": all_images,
                 "messages": [
                     {
                       "role": "system",
-                      "content": "You are a helpful assistant."
+                      "content": get_system_prompt(use_persona=False)
                     },
                     {
                         "role": "user",
-                        "content": (
-                            "You are a user who is happily enjoying short videos. "
-                            "You need to analyze the current video interface screenshot and make an appropriate action decision based on what you see. "
-                            "Respond strictly with a Python code block (starting with ```python) calling the following functions:\n"
-                            "```python\n"
-                            "watch(second: float = 2.0) # Continue watching the video\n"
-                            "like() # Give a like to the video\n"
-                            "comment(text: str = \"\") # Leave a comment on the video\n"
-                            "share(who: str = \"\") # share/forward the video to someone\n"
-                            "```\n"
-                            "You can call multiple functions in a single code block to perform multiple actions.\n"
-                            f"{history_placeholder}"
-                            f"Below is the video you are currently browsing:\n{current_video_placeholder}"
-                            f"{audio_placeholder}"
-                        )
+                        "content": user_prompt
                     },
                     {
                         "role": "assistant",
@@ -945,31 +896,32 @@ def prepare_training_data(
             else:
                 answer_with_reason = answer
             
+            # thinking 模式的 user prompt（基于基础 prompt，添加 reason 要求）
+            base_user_prompt = get_user_prompt(
+                history_screenshots=selected_history,
+                history_actions=str_actions if selected_history else None,
+                current_screenshots=current_screenshots,
+                audio_transcript=audio_text
+            )
+            # 在基础 prompt 中添加 thinking 模式的要求
+            thinking_user_prompt = base_user_prompt.replace(
+                "Respond strictly with a Python code block",
+                "Start by giving a short reason for the action you are taking, and then output a Python code block"
+            ).replace(
+                "starting with ```python",
+                "beginning with ```python"
+            )
+            
             sample_thinking = {
                 "images": all_images,
                 "messages": [
                     {
                       "role": "system",
-                      "content": "You are a helpful assistant."
+                      "content": get_system_prompt(use_persona=False)
                     },
                     {
                         "role": "user",
-                        "content": (
-                            "You are a user who is happily enjoying short videos. "
-                            "You need to analyze the current video interface screenshot and make an appropriate action decision based on what you see. "
-                            "Start by giving a short reason for the action you are taking, "
-                            "and then output a Python code block (beginning with ```python) that calls the functions listed below.\n"
-                            "```python\n"
-                            "watch(second: float = 2.0) # Continue watching the video\n"
-                            "like() # Give a like to the video\n"
-                            "comment(text: str = \"\") # Leave a comment on the video\n"
-                            "share(who: str = \"\") # share/forward the video to someone\n"
-                            "```\n"
-                            "You can call multiple functions in a single code block to perform multiple actions.\n"
-                            f"{history_placeholder}"
-                            f"Below is the video you are currently browsing:\n{current_video_placeholder}"
-                            f"{audio_placeholder}"
-                        )
+                        "content": thinking_user_prompt
                     },
                     {
                         "role": "assistant",
@@ -994,25 +946,11 @@ def prepare_training_data(
                 "messages": [
                     {
                       "role": "system",
-                      "content": f"You are a helpful assistant.\n\n{persona_prompt}" if persona_prompt else "You are a helpful assistant."
+                      "content": get_system_prompt(use_persona=True, persona=persona) if persona else get_system_prompt(use_persona=False)
                     },
                     {
                         "role": "user",
-                        "content": (
-                            "You are a user who is happily enjoying short videos. "
-                            "You need to analyze the current video interface screenshot and make an appropriate action decision based on what you see. "
-                            "Respond strictly with a Python code block (starting with ```python) calling the following functions:\n"
-                            "```python\n"
-                            "watch(second: float = 2.0) # Continue watching the video\n"
-                            "like() # Give a like to the video\n"
-                            "comment(text: str = \"\") # Leave a comment on the video\n"
-                            "share(who: str = \"\") # share/forward the video to someone\n"
-                            "```\n"
-                            "You can call multiple functions in a single code block to perform multiple actions.\n"
-                            f"{history_placeholder}"
-                            f"Below is the video you are currently browsing:\n{current_video_placeholder}"
-                            f"{audio_placeholder}"
-                        )
+                        "content": user_prompt
                     },
                     {
                         "role": "assistant",
@@ -1124,7 +1062,7 @@ def prepare_training_data(
         print(f"{display_name:15s}: {output_file_path} ({len(dataset):5d} 样本, {percentage:5.1f}%)")
     
     # 保存persona数据集
-    if persona_prompt:
+    if persona:
         print("\n" + "-"*40)
         print("Persona数据集:")
         print("-"*40)
