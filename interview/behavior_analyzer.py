@@ -130,22 +130,37 @@ class BehaviorAnalyzer:
         """分析创作者偏好"""
         creator_watch = Counter()
         creator_like = Counter()
+        creator_watch_duration = defaultdict(float)  # 每个作者的总观看时长
         
         for session in self.sessions:
             for action in session.get('actions', []):
                 video_path = action.get('video_path', '').replace('\\', '/')
                 stats = self.stats_analysis.get(video_path, {}).get('stats', {})
                 author = stats.get('author', '').strip()
+                viewing_duration = action.get('viewing_duration', 0)
                 
                 if author:
                     creator_watch[author] += 1
+                    creator_watch_duration[author] += viewing_duration
                     has_like = any(a.get('type') == 'like' for a in action.get('actions', []))
                     if has_like:
                         creator_like[author] += 1
         
+        # 按观看时长排序（top10）
+        most_watched_by_duration = sorted(
+            creator_watch_duration.items(), 
+            key=lambda x: x[1], 
+            reverse=True
+        )[:10]
+        
+        # 计算总观看时长
+        total_watch_duration = sum(creator_watch_duration.values())
+        
         return {
             "most_watched_creators": creator_watch.most_common(5),
             "most_liked_creators": creator_like.most_common(5),
+            "most_watched_by_duration": most_watched_by_duration,  # [(作者, 总时长), ...] top10
+            "total_watch_duration": total_watch_duration,  # 所有作者的总观看时长（秒）
             "unique_creators": len(creator_watch),
         }
     
@@ -225,11 +240,39 @@ class BehaviorAnalyzer:
         summary_parts.append(f"⏱️ 平均观看时长: {interaction['avg_watch_duration']:.1f}秒")
         summary_parts.append(f"⏭️ 快速划走率: {interaction['quick_skip_rate']:.1%}")
         
-        # 创作者偏好
+        # 创作者偏好 - 优先显示观看时长最多的创作者
         creators = analysis['creator_preferences']
-        if creators['most_liked_creators']:
+        
+        # 显示观看时长最多的创作者（top5）
+        if creators.get('most_watched_by_duration'):
+            top_by_duration = creators['most_watched_by_duration'][:5]
+            creator_names = []
+            for name, duration in top_by_duration:
+                minutes = duration / 60
+                if minutes >= 60:
+                    hours = int(minutes // 60)
+                    mins = int(minutes % 60)
+                    duration_str = f"{hours}h{mins}m"
+                else:
+                    duration_str = f"{int(minutes)}m"
+                creator_names.append(f"{name}({duration_str})")
+            summary_parts.append(f"👀 观看时长最多的创作者: {', '.join(creator_names)}")
+        elif creators.get('most_liked_creators'):
+            # 如果没有观看时长数据，降级到点赞最多的创作者
             top_creators = [name for name, _ in creators['most_liked_creators'][:3]]
             summary_parts.append(f"❤️ 喜欢的创作者: {', '.join(top_creators)}")
+        
+        # 总观看时长统计
+        total_duration = creators.get('total_watch_duration', 0)
+        if total_duration > 0:
+            # 转换为分钟显示
+            total_minutes = total_duration / 60
+            if total_minutes >= 60:
+                hours = int(total_minutes // 60)
+                minutes = int(total_minutes % 60)
+                summary_parts.append(f"⏰ 总观看时长: {hours}小时{minutes}分钟")
+            else:
+                summary_parts.append(f"⏰ 总观看时长: {total_minutes:.1f}分钟")
         
         # 热门内容偏好
         engagement = analysis['engagement_metrics']

@@ -73,7 +73,40 @@ def parse_solution_action(solution_str):
     # solution都用code block，摘第一个命令
     return parse_pred_action(solution_str)
 
-def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False):
+def load_persona(persona_file: str) -> dict:
+    """加载persona.json文件"""
+    if persona_file and os.path.exists(persona_file):
+        with open(persona_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+def format_persona_for_system_prompt(persona: dict) -> str:
+    """将persona信息格式化为system prompt的一部分"""
+    if not persona:
+        return ""
+    
+    # 提取persona_text（详细的用户画像描述）
+    persona_text = persona.get('persona_text', '')
+    
+    # 提取关键特征
+    key_traits = persona.get('key_traits', {})
+    
+    # 构建persona描述（注意：prepare_data.py中还有big_five，但我们已经移除了，所以这里不包含）
+    persona_description = f"""以下是你的用户画像信息，请根据这些特征来做出符合你个人偏好的行为决策：
+
+{persona_text}
+
+### 关键特征
+- 内容vs创作者偏好: {key_traits.get('content_vs_creator', 'N/A')}
+- 情绪调节倾向: {key_traits.get('emotion_regulation', 'N/A')}
+- 新奇容忍度: {key_traits.get('novelty_tolerance', 'N/A')}
+- 社交敏感度: {key_traits.get('social_sensitivity', 'N/A')}
+"""
+    return persona_description
+
+
+def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False, persona_file=None):
     """评估单个数据集"""
     test_file_path = f'data/{dataset_name}/{test_file}'
     
@@ -85,6 +118,15 @@ def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False)
     if output_dir is None:
         output_dir = f'result/{dataset_name}'
     os.makedirs(output_dir, exist_ok=True)
+    
+    # 加载persona信息（如果指定了persona_file）
+    persona = {}
+    persona_prompt = ""
+    if persona_file:
+        persona = load_persona(persona_file)
+        persona_prompt = format_persona_for_system_prompt(persona)
+        if persona_prompt:
+            print(f"已加载persona信息: {persona_file}")
     
     print(f"\n开始评估数据集: {dataset_name}")
     print(f"测试文件: {test_file_path}")
@@ -101,9 +143,25 @@ def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False)
     print(f"共{len(all_data)}条样本，开始推理...")
     
     for item in tqdm(all_data, desc=f"推理 {dataset_name}"):
-        messages = item['messages']
+        messages = item['messages'].copy()  # 复制messages，避免修改原始数据
+        
+        # 如果最后一条是assistant的消息，移除它（这是ground truth）
         if messages[-1]['role'] == 'assistant':
             messages = messages[:-1]
+        
+        # 如果提供了persona，将persona信息添加到system message
+        if persona_prompt:
+            if messages and messages[0]['role'] == 'system':
+                # 如果已有system message，追加persona信息
+                original_system = messages[0]['content']
+                messages[0]['content'] = f"{original_system}\n\n{persona_prompt}"
+            else:
+                # 如果没有system message，创建一个新的
+                messages.insert(0, {
+                    "role": "system",
+                    "content": f"You are a helpful assistant.\n\n{persona_prompt}"
+                })
+        
         gt_type, gt_value = parse_solution_action(item['solution'])
         type_true.append(gt_type)
         y_true.append(gt_value if gt_value is not None else 0.0)
@@ -218,6 +276,8 @@ if not datasets_to_test:
 
 print(f"将测试数据集: {', '.join(datasets_to_test)}")
 print(f"测试文件: {args.test_file}")
+if args.persona:
+    print("使用Persona模式：将加载persona.json文件")
 
 # 评估所有数据集
 results = []
@@ -226,7 +286,15 @@ file_type = "Persona" if is_persona else "Normal"
 
 for dataset in datasets_to_test:
     output_dir = f'result/{dataset}'
-    result = evaluate_dataset(dataset, args.test_file, output_dir=output_dir, is_persona=is_persona)
+    # 如果使用persona模式，加载对应的persona.json文件
+    persona_file = None
+    if args.persona:
+        persona_file = os.path.join('data', dataset, 'persona.json')
+        if not os.path.exists(persona_file):
+            print(f"警告: persona文件不存在 {persona_file}，将不使用persona信息")
+            persona_file = None
+    
+    result = evaluate_dataset(dataset, args.test_file, output_dir=output_dir, is_persona=is_persona, persona_file=persona_file)
     if result:
         result['type'] = file_type
         result['test_file'] = args.test_file

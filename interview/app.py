@@ -126,15 +126,17 @@ def create_app(
                 else:
                     response += f"\n\n---\n💡 **进入下一环节**: {next_section['title']}"
                 
-                # 生成新环节的第一个问题
-                next_question = agent.generate_section_question()
                 chat_history[-1][1] = response
+                
+                # 生成新环节的第一个问题（这会更新 section_turn）
+                next_question = agent.generate_section_question()
                 chat_history.append([None, next_question])
             else:
                 chat_history[-1][1] = response
         else:
             chat_history[-1][1] = response
         
+        # 在所有情况下，都使用最新的进度信息
         persona = agent.get_current_persona()
         progress_md = format_progress(agent)
         
@@ -150,13 +152,10 @@ def create_app(
         
         # 自动保存到 data/{name}/persona.json
         save_path = f"data/{dataset}/persona.json"
-        try:
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            with open(save_path, 'w', encoding='utf-8') as f:
-                f.write(persona_json)
-            save_msg = f"✅ 已保存到 {save_path}"
-        except Exception as e:
-            save_msg = f"❌ 保存失败: {e}"
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        with open(save_path, 'w', encoding='utf-8') as f:
+            f.write(persona_json)
+        save_msg = f"✅ 已保存到 {save_path}"
         
         return persona_json, save_msg
     
