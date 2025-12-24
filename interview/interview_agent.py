@@ -1,14 +1,13 @@
 """
-Interview Agent - 基于 LangChain 的用户访谈 Agent
+Interview Agent - 基于 Hugging Face Transformers 的用户访谈 Agent
 """
 import json
 import re
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 from pathlib import Path
+import torch
 
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from behavior_analyzer import BehaviorAnalyzer
 
 try:
@@ -94,21 +93,30 @@ class InterviewAgent:
         self,
         data_dir: str = "data/yqg",
         raw_data_dir: str = "raw_data/yqg",
-        api_base: str = "http://127.0.0.1:8012/v1",
-        api_key: str = "1234567890",
-        model: str = "qwen"
+        model_name: str = "zai-org/GLM-4.6",
+        device: Optional[str] = None
     ):
         self.data_dir = data_dir
         self.raw_data_dir = raw_data_dir
         self.analyzer = BehaviorAnalyzer(data_dir, raw_data_dir)
         
-        # 初始化 LLM
-        self.llm = ChatOpenAI(
-            base_url=api_base,
-            api_key=api_key,
-            model=model,
-            temperature=0.7,
+        # 初始化 Hugging Face 模型
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device
+        
+        print(f"正在加载模型 {model_name} 到 {device}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            trust_remote_code=True,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None
         )
+        if device == "cpu":
+            self.model = self.model.to(device)
+        self.model.eval()
+        print(f"模型加载完成！")
         
         # 状态
         self.turn = 0
@@ -122,6 +130,89 @@ class InterviewAgent:
         # 搜索工具
         self.ddgs = DDGS() if SEARCH_AVAILABLE else None
         self.section_turn = 0
+    
+    def _convert_messages_to_dict(self, messages) -> List[Dict[str, str]]:
+        """将 LangChain 风格的消息转换为字典格式"""
+        result = []
+        for msg in messages:
+            if hasattr(msg, 'content'):
+                # LangChain Message 对象
+                if hasattr(msg, 'type'):
+                    role_map = {
+                        'system': 'system',
+                        'human': 'user',
+                        'ai': 'assistant',
+                    }
+                    role = role_map.get(msg.type, 'user')
+                else:
+                    role = 'user'
+                content = msg.content
+            elif isinstance(msg, dict):
+                # 已经是字典格式
+                role = msg.get('role', 'user')
+                content = msg.get('content', '')
+            else:
+                continue
+            
+            result.append({"role": role, "content": str(content)})
+        return result
+    
+    def _invoke_llm(self, messages, max_length: int = 2048, temperature: float = 0.7) -> str:
+        """调用 Hugging Face 模型生成回复
+        
+        Args:
+            messages: 消息列表（LangChain Message 对象或字典格式）
+            max_length: 最大生成长度
+            temperature: 温度参数
+        
+        Returns:
+            生成的文本内容
+        """
+        # 转换为字典格式
+        formatted_messages = self._convert_messages_to_dict(messages)
+        
+        # 使用 tokenizer 的 apply_chat_template 方法格式化消息
+        try:
+            prompt = self.tokenizer.apply_chat_template(
+                formatted_messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+        except Exception as e:
+            # 如果 apply_chat_template 不可用，手动构建提示
+            print(f"Warning: apply_chat_template failed: {e}, using manual format")
+            prompt_parts = []
+            for msg in formatted_messages:
+                role = msg["role"]
+                content = msg["content"]
+                if role == "system":
+                    prompt_parts.append(f"System: {content}\n")
+                elif role == "user":
+                    prompt_parts.append(f"User: {content}\n")
+                elif role == "assistant":
+                    prompt_parts.append(f"Assistant: {content}\n")
+            prompt_parts.append("Assistant: ")
+            prompt = "".join(prompt_parts)
+        
+        # 编码输入
+        inputs = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+        
+        # 生成回复
+        with torch.no_grad():
+            outputs = self.model.generate(
+                inputs,
+                max_new_tokens=max_length,
+                temperature=temperature,
+                top_p=0.9,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id if self.tokenizer.eos_token_id else self.tokenizer.pad_token_id,
+            )
+        
+        # 解码输出（只取新生成的部分）
+        generated_ids = outputs[0][inputs.shape[1]:]
+        response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        
+        return response.strip()
     
     def _format_image_for_vllm(self, image_path: str) -> Dict[str, str]:
         """格式化图片用于 vLLM - 使用本地文件路径"""
@@ -239,12 +330,11 @@ class InterviewAgent:
 ]"""
         
         messages = [
-            SystemMessage(content="你是一个专业的访谈设计专家，擅长从文档中提取结构化信息。"),
-            HumanMessage(content=prompt)
+            {"role": "system", "content": "你是一个专业的访谈设计专家，擅长从文档中提取结构化信息。"},
+            {"role": "user", "content": prompt}
         ]
         
-        response = self.llm.invoke(messages)
-        content = response.content.strip()
+        content = self._invoke_llm(messages).strip()
         
         # 提取 JSON
         json_match = re.search(r'\[.*\]', content, re.DOTALL)
@@ -401,7 +491,7 @@ class InterviewAgent:
 
 回复要自然、简短（不超过80字）。"""
         
-        messages = [SystemMessage(content=system_content)]
+        messages = [{"role": "system", "content": system_content}]
         
         # 使用完整历史对话，让agent能看到之前环节的内容，避免重复提问
         # 但为了控制token数量，只使用最近的相关对话
@@ -409,14 +499,14 @@ class InterviewAgent:
         
         for msg in history_to_use:
             content = self._extract_text_content(msg["content"])
-            if msg["role"] == "user":
-                messages.append(HumanMessage(content=content))
+            role = msg["role"]
+            if role == "user":
+                messages.append({"role": "user", "content": content})
             else:
-                messages.append(AIMessage(content=content))
+                messages.append({"role": "assistant", "content": content})
         
         # 调用 LLM
-        response = self.llm.invoke(messages)
-        result = response.content.strip()
+        result = self._invoke_llm(messages).strip()
         
         # 提取问题（如果回复中包含问题）
         # 尝试从回复中提取问题：通常是第一句话或问号结尾的句子
@@ -530,8 +620,8 @@ class InterviewAgent:
             goal_text = first_section['goal']
         
         messages = [
-            SystemMessage(content=self.SYSTEM_PROMPT),
-            HumanMessage(content=f"""这是访谈的开始。
+            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "user", "content": f"""这是访谈的开始。
 
 {section_info}
 用户短视频行为数据摘要:
@@ -545,11 +635,10 @@ class InterviewAgent:
 2. 开放式深度提问，自然友好
 3. 不超过80字
 
-只输出问题。""")
+只输出问题。"""}
         ]
         
-        response = self.llm.invoke(messages)
-        question = response.content.strip()
+        question = self._invoke_llm(messages).strip()
         # 保存第一个问题到已问过的问题列表
         if question and question not in self.asked_questions:
             self.asked_questions.append(question)
@@ -578,8 +667,8 @@ class InterviewAgent:
 """
         
         messages = [
-            SystemMessage(content=self.SYSTEM_PROMPT),
-            HumanMessage(content=f"""现在进入新的访谈环节。
+            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "user", "content": f"""现在进入新的访谈环节。
 
 当前环节: {current_section['title']}
 环节目标: {current_section['goal']}
@@ -595,11 +684,10 @@ class InterviewAgent:
 3. 不超过80字
 4. 确保与已问过的问题明显不同
 
-只输出问题。""")
+只输出问题。"""}
         ]
         
-        response = self.llm.invoke(messages)
-        question = response.content.strip()
+        question = self._invoke_llm(messages).strip()
         # 保存问题到已问过的问题列表
         if question and question not in self.asked_questions:
             self.asked_questions.append(question)
@@ -664,12 +752,11 @@ class InterviewAgent:
 直接输出自述文本，不要其他格式。"""
         
         messages = [
-            SystemMessage(content="你是一个专业的用户研究员，擅长生成高信息密度的用户画像。"),
-            HumanMessage(content=prompt)
+            {"role": "system", "content": "你是一个专业的用户研究员，擅长生成高信息密度的用户画像。"},
+            {"role": "user", "content": prompt}
         ]
         
-        response = self.llm.invoke(messages)
-        persona = response.content.strip()
+        persona = self._invoke_llm(messages, max_length=1024).strip()
         self.current_persona = persona
         return persona
     

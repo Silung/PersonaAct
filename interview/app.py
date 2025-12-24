@@ -15,9 +15,7 @@ from behavior_analyzer import BehaviorAnalyzer
 def create_app(
     data_dir: str = "data/yqg",
     raw_data_dir: str = "raw_data/yqg",
-    api_base: str = "http://127.0.0.1:8012/v1",
-    api_key: str = "1234567890",
-    model: str = "qwen"
+    model_name: str = "zai-org/GLM-4.6"
 ):
     agent = None
     
@@ -55,9 +53,7 @@ def create_app(
         agent = InterviewAgent(
             data_dir=selected_data_dir,
             raw_data_dir=selected_raw_dir,
-            api_base=api_base,
-            api_key=api_key,
-            model=model
+            model_name=model_name
         )
         init_result = agent.initialize()
         first_question = agent.get_first_question()

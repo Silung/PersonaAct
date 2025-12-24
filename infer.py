@@ -83,10 +83,10 @@ def load_persona(persona_file: str) -> dict:
 from prompts import get_system_prompt, get_user_prompt
 
 
-def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False, persona_file=None, 
+def evaluate_dataset(dataset_name, test_file, data_dir="data", output_dir=None, is_persona=False, persona_file=None, 
                      api_base="http://127.0.0.1:8012/v1", api_key="1234567890", model="qwen"):
     """评估单个数据集"""
-    test_file_path = f'data/{dataset_name}/{test_file}'
+    test_file_path = os.path.join(data_dir, dataset_name, test_file)
     
     if not os.path.exists(test_file_path):
         print(f"跳过 {dataset_name}: 测试文件不存在 {test_file_path}")
@@ -218,12 +218,14 @@ def evaluate_dataset(dataset_name, test_file, output_dir=None, is_persona=False,
 
 # 解析命令行参数
 parser = argparse.ArgumentParser(description='Inference on test dataset')
+parser.add_argument('--data_dir', type=str, default='data',
+                    help='Data directory (default: data, can be data, data3, etc.)')
 parser.add_argument('--name', type=str, default=None, 
-                    help='User name (yqg, zsl, etc.). Only test data/{name}/')
-parser.add_argument('--test_file', type=str, default='video_action_test_item.jsonl',
-                    help='Test file name')
+                    help='User name (yqg, zsl, etc.). Only test {data_dir}/{name}/')
+parser.add_argument('--test_file', type=str, default=None,
+                    help='Test file name (auto-determined if not specified)')
 parser.add_argument('--persona', action='store_true',
-                    help='Test persona version of the dataset (persona_video_action_test_item.jsonl)')
+                    help='Test persona version of the dataset (auto-use persona_video_action_test_item.jsonl)')
 parser.add_argument('--api_base', type=str, default='http://127.0.0.1:8012/v1',
                     help='API base URL (default: http://127.0.0.1:8012/v1)')
 parser.add_argument('--api_key', type=str, default='1234567890',
@@ -232,14 +234,21 @@ parser.add_argument('--model', type=str, default='qwen',
                     help='Model name (default: qwen)')
 args = parser.parse_args()
 
-# 如果指定了--persona，修改test_file
-if args.persona and not args.test_file.startswith('persona_'):
+# 自动确定测试文件名
+if args.test_file is None:
+    # 如果没有指定test_file，根据persona选项自动确定
+    if args.persona:
+        args.test_file = 'persona_video_action_test_item.jsonl'
+    else:
+        args.test_file = 'video_action_test_item.jsonl'
+elif args.persona and not args.test_file.startswith('persona_'):
+    # 如果指定了test_file但使用了--persona，自动添加前缀
     args.test_file = 'persona_' + args.test_file
 
 # 确定要测试的数据集
 if args.name:
     # 指定了name，只测试该用户
-    test_path = os.path.join('data', args.name, args.test_file)
+    test_path = os.path.join(args.data_dir, args.name, args.test_file)
     if not os.path.exists(test_path):
         print(f"错误：测试文件不存在 {test_path}")
         exit(1)
@@ -247,9 +256,9 @@ if args.name:
 else:
     # 查找所有可用的数据集
     datasets_to_test = []
-    if os.path.exists('data'):
-        for name in os.listdir('data'):
-            dataset_path = os.path.join('data', name)
+    if os.path.exists(args.data_dir):
+        for name in os.listdir(args.data_dir):
+            dataset_path = os.path.join(args.data_dir, name)
             if os.path.isdir(dataset_path):
                 test_path = os.path.join(dataset_path, args.test_file)
                 if os.path.exists(test_path):
@@ -260,6 +269,7 @@ if not datasets_to_test:
     print("未找到任何可用的测试数据集")
     exit(1)
 
+print(f"数据目录: {args.data_dir}")
 print(f"将测试数据集: {', '.join(datasets_to_test)}")
 print(f"测试文件: {args.test_file}")
 if args.persona:
@@ -275,7 +285,7 @@ for dataset in datasets_to_test:
     # 如果使用persona模式，加载对应的persona.json文件
     persona_file = None
     if args.persona:
-        persona_file = os.path.join('data', dataset, 'persona.json')
+        persona_file = os.path.join(args.data_dir, dataset, 'persona.json')
         if not os.path.exists(persona_file):
             print(f"警告: persona文件不存在 {persona_file}，将不使用persona信息")
             persona_file = None
@@ -283,6 +293,7 @@ for dataset in datasets_to_test:
     result = evaluate_dataset(
         dataset, 
         args.test_file, 
+        data_dir=args.data_dir,
         output_dir=output_dir, 
         is_persona=is_persona, 
         persona_file=persona_file,

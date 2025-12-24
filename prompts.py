@@ -27,18 +27,13 @@ def format_persona_for_system_prompt(persona: dict) -> str:
 
 def get_system_prompt(use_persona: bool = False, persona: dict = None) -> str:
     """获取system prompt"""
-    base_prompt = "You are a helpful assistant."
-    
-    if use_persona and persona:
-        persona_prompt = format_persona_for_system_prompt(persona)
-        if persona_prompt:
-            return f"{base_prompt}\n\n{persona_prompt}"
-    
-    return base_prompt
+    # persona信息现在放在user message中，system只保留基础提示
+    return "You are a helpful assistant."
 
 
 def get_user_prompt(history_screenshots: list = None, history_actions: list = None, 
-                    current_screenshots: list = None, audio_transcript: str = None) -> str:
+                    current_screenshots: list = None, audio_transcript: str = None,
+                    persona: dict = None) -> str:
     """
     获取user prompt，与训练时完全一致
     
@@ -47,7 +42,15 @@ def get_user_prompt(history_screenshots: list = None, history_actions: list = No
         history_actions: 历史动作的代码字符串列表
         current_screenshots: 当前视频截图路径列表（支持多张）
         audio_transcript: 音频转录文本（可选）
+        persona: 用户画像信息（可选），如果提供会添加到user prompt开头
     """
+    # 构建persona提示（放在user message开头）
+    persona_placeholder = ""
+    if persona:
+        persona_description = format_persona_for_system_prompt(persona)
+        if persona_description:
+            persona_placeholder = f"{persona_description}\n\n"
+    
     # 构建历史提示
     history_placeholder = ""
     if history_screenshots and history_actions and len(history_screenshots) == len(history_actions):
@@ -68,6 +71,7 @@ def get_user_prompt(history_screenshots: list = None, history_actions: list = No
     
     # 构建完整的user prompt（与训练时完全一致）
     user_prompt = (
+        f"{persona_placeholder}"
         "You are a user who is happily enjoying short videos. "
         "You need to analyze the current video interface screenshot and make an appropriate action decision based on what you see. "
         "Respond strictly with a Python code block (starting with ```python) calling the following functions:\n"

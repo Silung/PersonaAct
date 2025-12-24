@@ -9,6 +9,9 @@ import concurrent.futures
 from tqdm import tqdm
 from typing import List, Dict, Tuple
 from prompts import get_system_prompt, get_user_prompt
+import librosa
+import soundfile as sf
+import tempfile
 
 
 client = OpenAI(
@@ -107,15 +110,11 @@ def get_category(image_paths: List[str], max_images: int = 10) -> dict:
         temperature=0.1
     )
     
-    try:
-        text = clean_json_response(response.choices[0].message.content)
-        category = json.loads(text)
-        if "categories" not in category:
-            category["categories"] = []
-        return category
-    except json.JSONDecodeError as e:
-        print(f"分类JSON解析失败: {e}")
-        return {"categories": []}
+    text = clean_json_response(response.choices[0].message.content)
+    category = json.loads(text)
+    if "categories" not in category:
+        category["categories"] = []
+    return category
 
 def parse_video_stats(image_path: str) -> dict:
     """
@@ -138,22 +137,18 @@ def parse_video_stats(image_path: str) -> dict:
         temperature=0.0
     )
     
-    try:
-        text = clean_json_response(response.choices[0].message.content)
-        stats = json.loads(text)
-        # 确保所有字段存在且为正确类型
-        result = {"like": 0, "comment": 0, "favorite": 0, "share": 0, "author": "", "title": ""}
-        for key in ["like", "comment", "favorite", "share"]:
-            if key in stats:
-                val = stats[key]
-                result[key] = int(val) if isinstance(val, (int, str)) and str(val).isdigit() else 0
-        for key in ["author", "title"]:
-            if key in stats:
-                result[key] = str(stats[key]) if stats[key] else ""
-        return result
-    except json.JSONDecodeError as e:
-        print(f"统计JSON解析失败: {e}")
-        return {"like": 0, "comment": 0, "favorite": 0, "share": 0, "author": "", "title": ""}
+    text = clean_json_response(response.choices[0].message.content)
+    stats = json.loads(text)
+    # 确保所有字段存在且为正确类型
+    result = {"like": 0, "comment": 0, "favorite": 0, "share": 0, "author": "", "title": ""}
+    for key in ["like", "comment", "favorite", "share"]:
+        if key in stats:
+            val = stats[key]
+            result[key] = int(val) if isinstance(val, (int, str)) and str(val).isdigit() else 0
+    for key in ["author", "title"]:
+        if key in stats:
+            result[key] = str(stats[key]) if stats[key] else ""
+    return result
 def load_session_files(raw_data_dir: str, collector_name: str = None) -> List[Tuple[str, Dict]]:
     """
     加载所有session文件（可选仅加载指定标注者）
@@ -315,42 +310,94 @@ def get_asr_model():
     return _asr_model, _asr_postprocess
 
 
-def transcribe_audio(audio_path: str) -> str:
+def extract_audio_first_2s(audio_path: str, output_path: str = None, duration: float = 2.0) -> str:
+    """
+    提取音频的前N秒（默认2秒），如果音频不足N秒则提取全部
+    
+    Args:
+        audio_path: 输入音频文件路径
+        output_path: 输出音频文件路径（如果为None，则使用临时文件）
+        duration: 要提取的时长（秒），默认2秒
+        
+    Returns:
+        输出音频文件路径，失败返回None
+    """
+    if not os.path.exists(audio_path):
+        return None
+    
+    # 加载音频文件
+    y, sr = librosa.load(audio_path, sr=None, duration=None)
+    
+    # 计算实际提取的时长（不超过音频长度）
+    actual_duration = min(duration, len(y) / sr)
+    
+    # 裁剪前N秒
+    samples_to_extract = int(actual_duration * sr)
+    y_extracted = y[:samples_to_extract]
+    
+    # 保存到临时文件或指定路径
+    if output_path is None:
+        fd, output_path = tempfile.mkstemp(suffix='.wav')
+        os.close(fd)
+    
+    # 保存裁剪后的音频
+    sf.write(output_path, y_extracted, sr)
+    return output_path
+
+
+def transcribe_audio(audio_path: str) -> Dict[str, str]:
     """
     将音频转换为文本（使用SenseVoiceSmall）
+    同时转录完整音频和前2秒音频
     
     Args:
         audio_path: 音频文件路径
         
     Returns:
-        转录的文本（简体中文，带标点）
+        包含 'text'（完整转录）和 'text_2s'（前2秒转录）的字典
     """
     if not os.path.exists(audio_path):
-        return ""
+        return {'text': '', 'text_2s': ''}
     
     model, postprocess_func = get_asr_model()
     if model is None or postprocess_func is None:
-        return ""
+        return {'text': '', 'text_2s': ''}
     
-    try:
-        result = model.generate(
-            input=audio_path,
+    result = {'text': '', 'text_2s': ''}
+    
+    # 转录完整音频
+    full_result = model.generate(
+        input=audio_path,
+        cache={},
+        language="auto",
+        use_itn=True,
+        batch_size_s=60,
+        merge_vad=True,
+        merge_length_s=15,
+    )
+    if isinstance(full_result, list) and len(full_result) > 0:
+        result['text'] = postprocess_func(full_result[0]["text"])
+    
+    # 转录前2秒音频
+    audio_2s_path = extract_audio_first_2s(audio_path, duration=2.0)
+    if audio_2s_path:
+        audio_2s_result = model.generate(
+            input=audio_2s_path,
             cache={},
-            language="auto",  # 自动检测语言
-            use_itn=True,  # 使用逆文本规范化（标点、数字等）
+            language="auto",
+            use_itn=True,
             batch_size_s=60,
             merge_vad=True,
             merge_length_s=15,
         )
+        if isinstance(audio_2s_result, list) and len(audio_2s_result) > 0:
+            result['text_2s'] = postprocess_func(audio_2s_result[0]["text"])
         
-        # 提取并后处理文本
-        if isinstance(result, list) and len(result) > 0:
-            text = postprocess_func(result[0]["text"])
-            return text
-        return ""
-    except Exception as e:
-        print(f"转录音频时出错 {audio_path}: {e}")
-        return ""
+        # 清理临时文件
+        if audio_2s_path.startswith(tempfile.gettempdir()):
+            os.remove(audio_2s_path)
+    
+    return result
 
 
 def analyze_audio_module(session_data: List[Tuple[str, Dict]], output_file: str):
@@ -393,11 +440,10 @@ def analyze_audio_module(session_data: List[Tuple[str, Dict]], output_file: str)
     # 使用多线程处理
     def process_single(action_info):
         audio_path = action_info['audio_path']
-        text = transcribe_audio(audio_path)
-        if text:
-            return audio_path, {
-                'text': text
-            }
+        result_dict = transcribe_audio(audio_path)
+        # 如果至少有一个转录结果不为空，则返回
+        if result_dict.get('text') or result_dict.get('text_2s'):
+            return audio_path, result_dict
         return audio_path, None
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:  # 音频转录较慢，用2线程
@@ -553,7 +599,7 @@ def analyze_stats_module(session_data: List[Tuple[str, Dict]], output_file: str)
     print(f"成功分析: {len(results)} 个视频")
 
 
-def analyze_action_reason(image_paths: List[str], action_info: dict) -> str:
+def analyze_action_reason(image_paths: List[str], action_info: dict) -> dict:
     """
     分析用户做出某个动作的原因
     
@@ -562,7 +608,7 @@ def analyze_action_reason(image_paths: List[str], action_info: dict) -> str:
         action_info: 动作信息，包含 viewing_duration 和 actions
         
     Returns:
-        str: 简短的原因描述
+        dict: 包含 'description'（视频描述）, 'category'（分类）, 'reason'（行为解释）
     """
     # 构建动作描述
     viewing_duration = action_info.get('viewing_duration', 0)
@@ -579,13 +625,46 @@ def analyze_action_reason(image_paths: List[str], action_info: dict) -> str:
             action_desc += f"，分享给：{act.get('text', '')}"
     
     sys_prompt = (
-        "你是一个短视频用户行为分析专家。根据视频截图和用户的实际行为，"
-        "用一句简短的话（不超过30字）分析用户做出这个行为的可能原因。\n"
-        "注意：\n"
-        "1. 原因要具体，结合视频内容\n"
-        "2. 如果用户快速划走，说明不感兴趣的原因，用户观看时间越长越有可能对视频内容感兴趣\n"
-        "3. 如果用户点赞/评论/分享，说明吸引用户的点\n"
-        "4. 只输出原因，不要有其他内容"
+        "你是一个短视频用户行为分析专家。请根据视频截图和用户的实际行为，完成以下三个任务：\n\n"
+        "1. **视频描述**：用一句话（不超过30字）描述视频的主要内容\n"
+        "2. **视频分类**：从以下【主类-子类】结构中选择最合适的1-2个分类：\n\n"
+        "{\n"
+        '  "娱乐": ["搞笑段子", "剧情短片", "才艺展示", "挑战实验", "综艺片段", "明星动态", "网红日常"],\n'
+        '  "知识教育": ["科普知识", "技能教学", "外语学习", "学习方法", "法律科普", "职业技能", "编程技术"],\n'
+        '  "生活记录": ["日常vlog", "家庭生活", "生活技巧", "情感故事", "社区互助", "公益记录", "怀旧故事"],\n'
+        '  "情感与心理": ["情感咨询", "恋爱关系", "婚姻家庭", "心理健康", "励志治愈", "情绪调节"],\n'
+        '  "美食": ["家常菜", "烘焙甜点", "特色小吃", "美食探店", "异国料理", "饮品调制", "美食测评"],\n'
+        '  "时尚美妆": ["穿搭分享", "美妆护肤", "发型造型", "配饰分享", "时尚资讯", "品牌测评", "美甲美睫"],\n'
+        '  "运动健身": ["健身训练", "球类运动", "户外探险", "瑜伽普拉提", "运动技巧", "极限运动", "康复训练"],\n'
+        '  "科技数码": ["手机测评", "电脑硬件", "智能家居", "软件技巧", "科技前沿", "数码配件", "AI应用"],\n'
+        '  "汽车": ["汽车评测", "驾驶技巧", "保养维护", "汽车文化", "新能源汽车", "二手车交易", "汽车改装"],\n'
+        '  "游戏": ["手游攻略", "端游实况", "电竞赛事", "游戏测评", "游戏教学", "游戏新闻", "虚拟世界/沙盒创作"],\n'
+        '  "音乐舞蹈": ["歌曲翻唱", "舞蹈表演", "乐器演奏", "声乐教学", "舞蹈教学", "音乐创作", "舞蹈编排"],\n'
+        '  "影视动漫": ["电影解说", "剧情剪辑", "影视评论", "经典影片", "动漫解说", "动画短片", "配音表演"],\n'
+        '  "旅行": ["国内旅行", "国外旅行", "旅行攻略", "露营体验", "景区探秘", "背包客路线", "小众景点"],\n'
+        '  "摄影与创作": ["摄影技巧", "器材测评", "后期制作", "人像摄影", "风光摄影", "手机摄影", "摄影作品展示"],\n'
+        '  "财经商业": ["商业分析", "创业经验", "理财知识", "投资策略", "副业思路", "营销策略", "经济观察"],\n'
+        '  "房产家居": ["住宅装修", "家居收纳", "家居好物", "房产知识", "租房买房", "园艺绿植", "智能家居"],\n'
+        '  "医疗健康": ["养生保健", "心理健康科普", "疾病预防", "营养饮食", "中医养生", "运动康复", "医药科普"],\n'
+        '  "三农乡村": ["农村生活", "农业种植", "乡村美食", "传统手艺", "乡村振兴", "农产品展示", "田园风光"],\n'
+        '  "宠物": ["狗狗日常", "猫咪日常", "宠物训练", "宠物医疗", "萌宠搞笑", "宠物用品", "动物救助"],\n'
+        '  "亲子育儿": ["育儿经验", "儿童教育", "萌娃日常", "亲子游戏", "孕期知识", "早教启蒙", "亲子旅行"],\n'
+        '  "二次元": ["动漫解说", "cosplay", "宅舞", "同人创作", "声优配音", "虚拟偶像", "动漫周边"],\n'
+        '  "文化历史": ["历史科普", "民俗文化", "文物考古", "非遗传承", "文学知识", "历史人物故事", "传统文化"],\n'
+        '  "军事法律": ["军事知识", "军事装备", "国防教育", "法律常识", "法律案例", "政策解读", "国际局势"],\n'
+        '  "社会资讯": ["社会热点", "民生事件", "公益新闻", "社会观察", "热点评论", "现场记录", "公共安全"],\n'
+        '  "广告推广": ["商业广告", "产品推广", "品牌宣传", "直播带货", "开箱测评", "促销活动", "软广植入"]\n'
+        "}\n\n"
+        "3. **行为解释**：用一句话（不超过30字）结合视频内容、分类和用户行为（观看时长、点赞/评论/分享）解释用户为什么这样做\n"
+        "   - 如果用户快速划走（<3秒），说明不感兴趣的原因\n"
+        "   - 如果用户观看较久但没有互动，说明内容吸引但不足以互动的原因\n"
+        "   - 如果用户点赞/评论/分享，说明内容打动用户的具体点\n\n"
+        "输出格式（纯JSON，不要有其他内容）：\n"
+        "{\n"
+        '  "description": "视频描述",\n'
+        '  "category": {"main": "主类", "sub": "子类"},\n'
+        '  "reason": "行为解释"\n'
+        "}"
     )
     
     # 构建多张图片的content
@@ -599,7 +678,7 @@ def analyze_action_reason(image_paths: List[str], action_info: dict) -> str:
     
     content.append({
         "type": "text",
-        "text": f"用户行为：{action_desc}\n请分析原因："
+        "text": f"用户行为：{action_desc}\n\n请完成上述三个任务："
     })
     
     messages = [
@@ -607,18 +686,29 @@ def analyze_action_reason(image_paths: List[str], action_info: dict) -> str:
         {"role": "user", "content": content}
     ]
     
+    response = client.chat.completions.create(
+        model="qwen",
+        messages=messages,
+        temperature=0.3,
+        max_tokens=300
+    )
+    
+    text = clean_json_response(response.choices[0].message.content)
     try:
-        response = client.chat.completions.create(
-            model="qwen",
-            messages=messages,
-            temperature=0.3,
-            max_tokens=100
-        )
-        reason = response.choices[0].message.content.strip()
-        return reason
-    except Exception as e:
-        print(f"分析原因失败: {e}")
-        return ""
+        result = json.loads(text)
+        # 确保返回所需的字段
+        return {
+            'description': result.get('description', ''),
+            'category': result.get('category', {'main': '', 'sub': ''}),
+            'reason': result.get('reason', '')
+        }
+    except json.JSONDecodeError:
+        # 如果解析失败，返回空结果
+        return {
+            'description': '',
+            'category': {'main': '', 'sub': ''},
+            'reason': text  # 降级：直接使用原始文本作为reason
+        }
 
 
 def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str):
@@ -660,7 +750,7 @@ def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str
         video_path = action_info['video_path']
         screenshots = action_info['screenshots']
         
-        reason = analyze_action_reason(screenshots, {
+        reason_result = analyze_action_reason(screenshots, {
             'viewing_duration': action_info['viewing_duration'],
             'actions': action_info['actions']
         })
@@ -678,7 +768,9 @@ def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str
         
         return video_path, {
             'action': action_str,
-            'reason': reason,
+            'description': reason_result.get('description', ''),
+            'category': reason_result.get('category', {'main': '', 'sub': ''}),
+            'reason': reason_result.get('reason', ''),
             'collector': action_info['collector'],
             'session_id': action_info['session_id'],
             'timestamp': action_info['timestamp']
@@ -690,7 +782,7 @@ def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str
         with tqdm(total=len(futures), desc="分析进度", ncols=80) as pbar:
             for fut in concurrent.futures.as_completed(futures):
                 video_path, result = fut.result()
-                if result and result['reason']:
+                if result and (result.get('reason') or result.get('description')):
                     results[video_path] = result
                 pbar.update(1)
     
@@ -722,7 +814,8 @@ def prepare_training_data(
     action_reason_file: str = None,
     persona_file: str = None,
     random_seed: int = 42,
-    think: bool = False
+    think: bool = False,
+    audio_version: str = 'none'
 ):
     """
     将session数据切分为带历史的训练数据，并按session划分数据集避免信息泄露
@@ -737,6 +830,7 @@ def prepare_training_data(
         persona_file: persona.json文件路径
         random_seed: 随机种子
         think: 是否使用思考模式
+        audio_version: 音频版本，可选 'none'（默认）、'full'、'2s'
     """
     print("\n" + "="*60)
     print("开始准备训练数据")
@@ -829,10 +923,14 @@ def prepare_training_data(
             else:
                 history_placeholder = ""
             
-            # 获取音频转录文本
-            audio_text = ""
+            # 获取三种版本的音频转录文本
+            audio_text_full = ""  # 完整转录
+            audio_text_2s = ""    # 2秒转录
+            audio_text_none = ""  # 无转录
+            
             if audio_path in audio_transcripts:
-                audio_text = audio_transcripts[audio_path].get('text', '')
+                audio_text_full = audio_transcripts[audio_path].get('text', '')
+                audio_text_2s = audio_transcripts[audio_path].get('text_2s', '')
             
             # 构建动作标签（用于监督学习）
             user_actions = action.get('actions', [])
@@ -848,177 +946,280 @@ def prepare_training_data(
                     answer += f"share({act['text']})\n"
             answer += '```'
             
-            # 使用 prompts.py 中的函数生成 user prompt
-            user_prompt = get_user_prompt(
-                history_screenshots=selected_history,
-                history_actions=str_actions if selected_history else None,
-                current_screenshots=current_screenshots,
-                audio_transcript=audio_text
-            )
-            
-            sample = {
-                "images": all_images,
-                "messages": [
-                    {
-                      "role": "system",
-                      "content": get_system_prompt(use_persona=False)
-                    },
-                    {
-                        "role": "user",
-                        "content": user_prompt
-                    },
-                    {
-                        "role": "assistant",
-                        "content": answer
-                    }
-                ],
-                "solution": answer,
-                "metadata": {
-                    "collector": collector,
-                    "session_id": session['session_id'],
-                    "timestamp": action.get('timestamp', ''),
-                    "viewing_duration": action.get('viewing_duration', 0),
-                    "xml_path": xml_path,
-                    "video_path": action.get('video_path', '').replace('\\', '/'),
-                    "audio_path": action.get('audio_path', '').replace('\\', '/')
-                }
-            }
-            
             # 获取动作原因（用于think模式）
             reason_text = ""
             if video_path in action_reasons:
-                reason_text = action_reasons[video_path].get('reason', '')
+                reason_data = action_reasons[video_path]
+                description = reason_data.get('description', '')
+                category = reason_data.get('category', {})
+                reason = reason_data.get('reason', '')
+                
+                # 构建完整的分析文本（描述+分类+解释）
+                parts = []
+                
+                # 1. 视频内容描述
+                if description:
+                    parts.append(f"视频内容：{description}")
+                
+                # 2. 视频分类
+                category_str = f"{category.get('main', '')}-{category.get('sub', '')}" if category.get('main') else ""
+                if category_str:
+                    parts.append(f"分类：{category_str}")
+                
+                # 3. 行为解释
+                if reason:
+                    parts.append(f"行为分析：{reason}")
+                
+                # 组合成完整文本
+                if parts:
+                    reason_text = "\n".join(parts)
             
-            # 构建带原因的回答
+            # 构建带原因的回答（用于think模式）
             answer_with_reason = ""
             if reason_text:
-                answer_with_reason = f"{reason_text}\n{answer}"
+                answer_with_reason = f"{reason_text}\n\n{answer}"
             else:
                 answer_with_reason = answer
             
-            # thinking 模式的 user prompt（基于基础 prompt，添加 reason 要求）
-            base_user_prompt = get_user_prompt(
-                history_screenshots=selected_history,
-                history_actions=str_actions if selected_history else None,
-                current_screenshots=current_screenshots,
-                audio_transcript=audio_text
-            )
-            # 在基础 prompt 中添加 thinking 模式的要求
-            thinking_user_prompt = base_user_prompt.replace(
-                "Respond strictly with a Python code block",
-                "Start by giving a short reason for the action you are taking, and then output a Python code block"
-            ).replace(
-                "starting with ```python",
-                "beginning with ```python"
-            )
-            
-            sample_thinking = {
-                "images": all_images,
-                "messages": [
-                    {
-                      "role": "system",
-                      "content": get_system_prompt(use_persona=False)
-                    },
-                    {
-                        "role": "user",
-                        "content": thinking_user_prompt
-                    },
-                    {
-                        "role": "assistant",
-                        "content": answer_with_reason
-                    }
-                ],
-                "solution": answer_with_reason,
-                "metadata": {
-                    "collector": collector,
-                    "session_id": session['session_id'],
-                    "timestamp": action.get('timestamp', ''),
-                    "viewing_duration": action.get('viewing_duration', 0),
-                    "xml_path": xml_path,
-                    "video_path": action.get('video_path', '').replace('\\', '/'),
-                    "audio_path": action.get('audio_path', '').replace('\\', '/')
-                }
+            # 通用的元数据
+            metadata = {
+                "collector": collector,
+                "session_id": session['session_id'],
+                "timestamp": action.get('timestamp', ''),
+                "viewing_duration": action.get('viewing_duration', 0),
+                "xml_path": xml_path,
+                "video_path": action.get('video_path', '').replace('\\', '/'),
+                "audio_path": action.get('audio_path', '').replace('\\', '/')
             }
             
-            # 带persona的样本
-            sample_persona = {
-                "images": all_images,
-                "messages": [
-                    {
-                      "role": "system",
-                      "content": get_system_prompt(use_persona=True, persona=persona) if persona else get_system_prompt(use_persona=False)
-                    },
-                    {
-                        "role": "user",
-                        "content": user_prompt
-                    },
-                    {
-                        "role": "assistant",
-                        "content": answer
-                    }
-                ],
-                "solution": answer,
-                "metadata": {
-                    "collector": collector,
-                    "session_id": session['session_id'],
-                    "timestamp": action.get('timestamp', ''),
-                    "viewing_duration": action.get('viewing_duration', 0),
-                    "xml_path": xml_path,
-                    "video_path": action.get('video_path', '').replace('\\', '/'),
-                    "audio_path": action.get('audio_path', '').replace('\\', '/')
+            # 辅助函数：创建样本
+            def create_sample(audio_text_version, use_thinking=False):
+                """创建单个样本"""
+                # 生成基础 user prompt（普通样本不使用persona）
+                base_user_prompt = get_user_prompt(
+                    history_screenshots=selected_history,
+                    history_actions=str_actions if selected_history else None,
+                    current_screenshots=current_screenshots,
+                    audio_transcript=audio_text_version,
+                    persona=None
+                )
+                
+                # 如果使用thinking模式，修改prompt
+                if use_thinking:
+                    user_prompt = base_user_prompt.replace(
+                        "Respond strictly with a Python code block",
+                        "Start by giving a short reason for the action you are taking, and then output a Python code block"
+                    ).replace(
+                        "starting with ```python",
+                        "beginning with ```python"
+                    )
+                    assistant_content = answer_with_reason
+                    solution_content = answer_with_reason
+                else:
+                    user_prompt = base_user_prompt
+                    assistant_content = answer
+                    solution_content = answer
+                
+                return {
+                    "images": all_images,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": get_system_prompt(use_persona=False)
+                        },
+                        {
+                            "role": "user",
+                            "content": user_prompt
+                        },
+                        {
+                            "role": "assistant",
+                            "content": assistant_content
+                        }
+                    ],
+                    "solution": solution_content,
+                    "metadata": metadata.copy()
                 }
-            }
             
-            if think:
-                samples.append((sample_thinking, sample_persona))
-            else:
-                samples.append((sample, sample_persona))
+            # 辅助函数：创建persona样本
+            def create_persona_sample(audio_text_version, use_thinking=False):
+                """创建带persona的样本"""
+                # persona信息现在放在user message中
+                base_user_prompt = get_user_prompt(
+                    history_screenshots=selected_history,
+                    history_actions=str_actions if selected_history else None,
+                    current_screenshots=current_screenshots,
+                    audio_transcript=audio_text_version,
+                    persona=persona if persona else None
+                )
+                
+                if use_thinking:
+                    user_prompt = base_user_prompt.replace(
+                        "Respond strictly with a Python code block",
+                        "Start by giving a short reason for the action you are taking, and then output a Python code block"
+                    ).replace(
+                        "starting with ```python",
+                        "beginning with ```python"
+                    )
+                    assistant_content = answer_with_reason
+                    solution_content = answer_with_reason
+                else:
+                    user_prompt = base_user_prompt
+                    assistant_content = answer
+                    solution_content = answer
+                
+                return {
+                    "images": all_images,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": get_system_prompt(use_persona=False)
+                        },
+                        {
+                            "role": "user",
+                            "content": user_prompt
+                        },
+                        {
+                            "role": "assistant",
+                            "content": assistant_content
+                        }
+                    ],
+                    "solution": solution_content,
+                    "metadata": metadata.copy()
+                }
+            
+            # 生成三种版本的样本：(完整转录, 2s转录, 无转录)
+            sample_full = create_sample(audio_text_full, use_thinking=think)
+            sample_2s = create_sample(audio_text_2s, use_thinking=think)
+            sample_none = create_sample(audio_text_none, use_thinking=think)
+            
+            # 生成三种版本的persona样本
+            persona_sample_full = create_persona_sample(audio_text_full, use_thinking=think)
+            persona_sample_2s = create_persona_sample(audio_text_2s, use_thinking=think)
+            persona_sample_none = create_persona_sample(audio_text_none, use_thinking=think)
+            
+            # 返回三种版本的样本：(完整转录, 2s转录, 无转录)，每种包含(普通, persona)
+            samples.append((
+                (sample_full, sample_2s, sample_none),
+                (persona_sample_full, persona_sample_2s, persona_sample_none)
+            ))
         
         return samples
     
-    # 生成各个数据集
-    valid_dataset = []
-    test_dataset = []
-    train_dataset = []
-    train_dataset_all = []
-    sft_dataset = []
+    # 生成各个数据集 - 三种版本：完整转录、2秒转录、无转录
+    # 每个数据集都有三种版本
+    datasets_full = {
+        'valid': [],
+        'test': [],
+        'train': [],
+        'train_all': [],
+        'sft': []
+    }
+    datasets_2s = {
+        'valid': [],
+        'test': [],
+        'train': [],
+        'train_all': [],
+        'sft': []
+    }
+    datasets_none = {
+        'valid': [],
+        'test': [],
+        'train': [],
+        'train_all': [],
+        'sft': []
+    }
     
-    # persona数据集
-    persona_valid_dataset = []
-    persona_test_dataset = []
-    persona_train_dataset = []
-    persona_train_dataset_all = []
-    persona_sft_dataset = []
+    # persona数据集 - 三种版本
+    persona_datasets_full = {
+        'valid': [],
+        'test': [],
+        'train': [],
+        'train_all': [],
+        'sft': []
+    }
+    persona_datasets_2s = {
+        'valid': [],
+        'test': [],
+        'train': [],
+        'train_all': [],
+        'sft': []
+    }
+    persona_datasets_none = {
+        'valid': [],
+        'test': [],
+        'train': [],
+        'train_all': [],
+        'sft': []
+    }
     
     for collector, session in session_data:
         samples = generate_samples_from_session(collector, session)
         
-        num_sft_data = 0
         num_sft_data = int(len(samples)*0.3)
         num_vaild = len(samples) // 10
         num_test = len(samples) // 10
+        
         # 如果样本数 <= 4，全部放入train
         if num_vaild == 0:
-            train_dataset.extend([s[0] for s in samples])
-            train_dataset_all.extend([s[0] for s in samples])
-            persona_train_dataset.extend([s[1] for s in samples])
-            persona_train_dataset_all.extend([s[1] for s in samples])
+            # 完整转录版本
+            datasets_full['train'].extend([s[0][0] for s in samples])
+            datasets_full['train_all'].extend([s[0][0] for s in samples])
+            persona_datasets_full['train'].extend([s[1][0] for s in samples])
+            persona_datasets_full['train_all'].extend([s[1][0] for s in samples])
+            # 2秒转录版本
+            datasets_2s['train'].extend([s[0][1] for s in samples])
+            datasets_2s['train_all'].extend([s[0][1] for s in samples])
+            persona_datasets_2s['train'].extend([s[1][1] for s in samples])
+            persona_datasets_2s['train_all'].extend([s[1][1] for s in samples])
+            # 无转录版本
+            datasets_none['train'].extend([s[0][2] for s in samples])
+            datasets_none['train_all'].extend([s[0][2] for s in samples])
+            persona_datasets_none['train'].extend([s[1][2] for s in samples])
+            persona_datasets_none['train_all'].extend([s[1][2] for s in samples])
         else:
             last = samples[-(num_vaild + num_test):]
             first = samples[:num_sft_data]
             random.shuffle(last)
             random.shuffle(first)
-            valid_dataset.extend([s[0] for s in last[:num_vaild]])
-            test_dataset.extend([s[0] for s in last[num_vaild:]])
-            persona_valid_dataset.extend([s[1] for s in last[:num_vaild]])
-            persona_test_dataset.extend([s[1] for s in last[num_vaild:]])
+            
+            # 完整转录版本
+            datasets_full['valid'].extend([s[0][0] for s in last[:num_vaild]])
+            datasets_full['test'].extend([s[0][0] for s in last[num_vaild:]])
+            persona_datasets_full['valid'].extend([s[1][0] for s in last[:num_vaild]])
+            persona_datasets_full['test'].extend([s[1][0] for s in last[num_vaild:]])
             if first:
-                sft_dataset.extend([s[0] for s in first])
-                persona_sft_dataset.extend([s[1] for s in first])
-            train_dataset.extend([s[0] for s in samples[num_sft_data:-(num_vaild + num_test)]])
-            train_dataset_all.extend([s[0] for s in samples[:-(num_vaild + num_test)]])
-            persona_train_dataset.extend([s[1] for s in samples[num_sft_data:-(num_vaild + num_test)]])
-            persona_train_dataset_all.extend([s[1] for s in samples[:-(num_vaild + num_test)]])
+                datasets_full['sft'].extend([s[0][0] for s in first])
+                persona_datasets_full['sft'].extend([s[1][0] for s in first])
+            datasets_full['train'].extend([s[0][0] for s in samples[num_sft_data:-(num_vaild + num_test)]])
+            datasets_full['train_all'].extend([s[0][0] for s in samples[:-(num_vaild + num_test)]])
+            persona_datasets_full['train'].extend([s[1][0] for s in samples[num_sft_data:-(num_vaild + num_test)]])
+            persona_datasets_full['train_all'].extend([s[1][0] for s in samples[:-(num_vaild + num_test)]])
+            
+            # 2秒转录版本
+            datasets_2s['valid'].extend([s[0][1] for s in last[:num_vaild]])
+            datasets_2s['test'].extend([s[0][1] for s in last[num_vaild:]])
+            persona_datasets_2s['valid'].extend([s[1][1] for s in last[:num_vaild]])
+            persona_datasets_2s['test'].extend([s[1][1] for s in last[num_vaild:]])
+            if first:
+                datasets_2s['sft'].extend([s[0][1] for s in first])
+                persona_datasets_2s['sft'].extend([s[1][1] for s in first])
+            datasets_2s['train'].extend([s[0][1] for s in samples[num_sft_data:-(num_vaild + num_test)]])
+            datasets_2s['train_all'].extend([s[0][1] for s in samples[:-(num_vaild + num_test)]])
+            persona_datasets_2s['train'].extend([s[1][1] for s in samples[num_sft_data:-(num_vaild + num_test)]])
+            persona_datasets_2s['train_all'].extend([s[1][1] for s in samples[:-(num_vaild + num_test)]])
+            
+            # 无转录版本
+            datasets_none['valid'].extend([s[0][2] for s in last[:num_vaild]])
+            datasets_none['test'].extend([s[0][2] for s in last[num_vaild:]])
+            persona_datasets_none['valid'].extend([s[1][2] for s in last[:num_vaild]])
+            persona_datasets_none['test'].extend([s[1][2] for s in last[num_vaild:]])
+            if first:
+                datasets_none['sft'].extend([s[0][2] for s in first])
+                persona_datasets_none['sft'].extend([s[1][2] for s in first])
+            datasets_none['train'].extend([s[0][2] for s in samples[num_sft_data:-(num_vaild + num_test)]])
+            datasets_none['train_all'].extend([s[0][2] for s in samples[:-(num_vaild + num_test)]])
+            persona_datasets_none['train'].extend([s[1][2] for s in samples[num_sft_data:-(num_vaild + num_test)]])
+            persona_datasets_none['train_all'].extend([s[1][2] for s in samples[:-(num_vaild + num_test)]])
     
     # 保存数据集
     output_path = Path(output_file)
@@ -1027,58 +1228,106 @@ def prepare_training_data(
     base_name = output_path.stem
     ext = output_path.suffix
     
-    # 保存各个数据集
-    # 数据集名称映射到文件后缀
+    # 定义三种音频版本的前缀（none为默认版本，不加前缀）
+    audio_version_prefixes = {
+        'none': '',  # 默认版本，无前缀
+        'full': 'audio_full',
+        '2s': 'audio_2s'
+    }
+    
+    # 定义三种版本的数据集字典
+    all_datasets = {
+        'full': datasets_full,
+        '2s': datasets_2s,
+        'none': datasets_none
+    }
+    
+    all_persona_datasets = {
+        'full': persona_datasets_full,
+        '2s': persona_datasets_2s,
+        'none': persona_datasets_none
+    }
+    
+    # 数据集名称映射到文件后缀（键名必须与datasets字典中的键名一致）
     dataset_file_mapping = {
-        'train': ('train', train_dataset),
-        'train_all': ('train_all', train_dataset_all),
-        'train_sft': ('train_sft', sft_dataset),
-        'valid_item': ('valid_item', valid_dataset),
-        'test_item': ('test_item', test_dataset)
+        'train': 'train',
+        'train_all': 'train_all',
+        'sft': 'train_sft',
+        'valid': 'valid_item',
+        'test': 'test_item'
     }
     
-    # persona数据集映射
-    persona_dataset_file_mapping = {
-        'persona_train': ('train', persona_train_dataset),
-        'persona_train_all': ('train_all', persona_train_dataset_all),
-        'persona_train_sft': ('train_sft', persona_sft_dataset),
-        'persona_valid_item': ('valid_item', persona_valid_dataset),
-        'persona_test_item': ('test_item', persona_test_dataset)
-    }
-    
-    total_samples = sum(len(data) for _, data in dataset_file_mapping.values())
+    # 计算总样本数（使用完整转录版本作为基准）
+    total_samples = sum(len(datasets_full[key]) for key in ['train', 'train_all', 'sft', 'valid', 'test'])
     
     print("\n" + "="*60)
     print(f"数据集划分完成（随机种子={random_seed}）")
     print("="*60)
     
-    for display_name, (file_suffix, dataset) in dataset_file_mapping.items():
-        output_file_path = output_path.parent / f"{"thinking_" if think else ""}video_action_{file_suffix}{ext}"
-        with open(output_file_path, 'w', encoding='utf-8') as f:
-            for item in dataset:
-                f.write(json.dumps(item, ensure_ascii=False) + '\n')
-        
-        percentage = len(dataset) / total_samples * 100 if total_samples > 0 else 0
-        print(f"{display_name:15s}: {output_file_path} ({len(dataset):5d} 样本, {percentage:5.1f}%)")
+    # 根据audio_version参数决定保存哪些版本
+    versions_to_save = [audio_version] if audio_version in audio_version_prefixes else ['none']
     
-    # 保存persona数据集
+    # 保存指定版本的数据集
+    for version_key in versions_to_save:
+        version_prefix = audio_version_prefixes[version_key]
+        datasets = all_datasets[version_key]
+        
+        version_display = "默认（无转录）" if version_prefix == '' else f"{version_prefix.upper()}"
+        print(f"\n{version_display} 版本数据集:")
+        print("-" * 60)
+        
+        for display_name, file_suffix in dataset_file_mapping.items():
+            dataset = datasets[display_name]
+            if dataset:  # 只保存非空数据集
+                # 如果是默认版本（无前缀），文件名格式不同
+                if version_prefix == '':
+                    filename_prefix = f"{'thinking_' if think else ''}video_action_{file_suffix}"
+                else:
+                    filename_prefix = f"{'thinking_' if think else ''}{version_prefix}_video_action_{file_suffix}"
+                output_file_path = output_path.parent / f"{filename_prefix}{ext}"
+                with open(output_file_path, 'w', encoding='utf-8') as f:
+                    for item in dataset:
+                        f.write(json.dumps(item, ensure_ascii=False) + '\n')
+                
+                percentage = len(dataset) / total_samples * 100 if total_samples > 0 else 0
+                version_label = "默认（无转录）" if version_prefix == '' else f"{version_prefix}"
+                print(f"  {display_name:15s} [{version_label:15s}]: {output_file_path.name} ({len(dataset):5d} 样本, {percentage:5.1f}%)")
+    
+    # 保存persona数据集（指定版本）
     if persona:
-        print("\n" + "-"*40)
-        print("Persona数据集:")
-        print("-"*40)
-        for display_name, (file_suffix, dataset) in persona_dataset_file_mapping.items():
-            output_file_path = output_path.parent / f"{"thinking_" if think else ""}persona_video_action_{file_suffix}{ext}"
-            with open(output_file_path, 'w', encoding='utf-8') as f:
-                for item in dataset:
-                    f.write(json.dumps(item, ensure_ascii=False) + '\n')
+        print("\n" + "="*60)
+        print("PERSONA数据集:")
+        print("="*60)
+        
+        for version_key in versions_to_save:
+            version_prefix = audio_version_prefixes[version_key]
+            persona_datasets = all_persona_datasets[version_key]
             
-            percentage = len(dataset) / total_samples * 100 if total_samples > 0 else 0
-            print(f"{display_name:15s}: {output_file_path} ({len(dataset):5d} 样本, {percentage:5.1f}%)")
+            version_display = "默认（无转录）" if version_prefix == '' else f"{version_prefix.upper()}"
+            print(f"\n{version_display} 版本 Persona数据集:")
+            print("-" * 60)
+            
+            for display_name, file_suffix in dataset_file_mapping.items():
+                dataset = persona_datasets[display_name]
+                if dataset:  # 只保存非空数据集
+                    # 如果是默认版本（无前缀），文件名格式不同
+                    if version_prefix == '':
+                        filename_prefix = f"{'thinking_' if think else ''}persona_video_action_{file_suffix}"
+                    else:
+                        filename_prefix = f"{'thinking_' if think else ''}{version_prefix}_persona_video_action_{file_suffix}"
+                    output_file_path = output_path.parent / f"{filename_prefix}{ext}"
+                    with open(output_file_path, 'w', encoding='utf-8') as f:
+                        for item in dataset:
+                            f.write(json.dumps(item, ensure_ascii=False) + '\n')
+                    
+                    percentage = len(dataset) / total_samples * 100 if total_samples > 0 else 0
+                    version_label = "默认（无转录）" if version_prefix == '' else f"{version_prefix}"
+                    print(f"  {display_name:15s} [{version_label:15s}]: {output_file_path.name} ({len(dataset):5d} 样本, {percentage:5.1f}%)")
     
     print(f"\n总样本数: {total_samples}")
     
-    # 统计信息
-    all_samples = train_dataset + valid_dataset + test_dataset
+    # 统计信息（使用完整转录版本）
+    all_samples = datasets_full['train'] + datasets_full['valid'] + datasets_full['test']
     total_with_history = sum(1 for s in all_samples if len(s['images']) > 1)
     avg_history = sum(len(s['images']) - 1 for s in all_samples) / len(all_samples) if all_samples else 0
     print(f"包含历史记录的样本: {total_with_history}")
@@ -1117,6 +1366,10 @@ def main():
 
     parser.add_argument('--think', action='store_true', default=False,
                        help='是否使用思考模式')
+    
+    parser.add_argument('--audio', type=str, default='none',
+                       choices=['none', 'full', '2s'],
+                       help='音频转录版本: none(无转录,默认), full(完整转录), 2s(2秒转录)')
 
     args = parser.parse_args()
     
@@ -1218,7 +1471,8 @@ def main():
                 action_reason_file=action_reason_file if os.path.exists(action_reason_file) else None,
                 persona_file=persona_file if os.path.exists(persona_file) else None,
                 random_seed=args.random_seed,
-                think=args.think
+                think=args.think,
+                audio_version=args.audio
             )
     
     print("\n" + "="*60)
