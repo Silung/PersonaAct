@@ -58,12 +58,21 @@ class Ui_MainWindow(object):
         self.model_url_layout.addWidget(self.model_url_input)
         self.ai_layout.addLayout(self.model_url_layout)
         
+        self.persona_input_layout = QHBoxLayout()
+        self.label_persona = QLabel("Persona*:")
+        self.persona_input = QLineEdit()
+        self.persona_input.setObjectName("persona_input")
+        self.persona_input.setPlaceholderText("请输入persona名称（必填）")
+        self.persona_input_layout.addWidget(self.label_persona)
+        self.persona_input_layout.addWidget(self.persona_input)
+        self.ai_layout.addLayout(self.persona_input_layout)
+        
         self.persona_select_layout = QHBoxLayout()
-        self.label_persona = QLabel("Persona:")
+        self.label_persona_template = QLabel("模板:")
         self.persona_select = QComboBox()
         self.persona_select.setObjectName("persona_select")
         self.persona_select.addItems(["None", "zsl", "yqg"])
-        self.persona_select_layout.addWidget(self.label_persona)
+        self.persona_select_layout.addWidget(self.label_persona_template)
         self.persona_select_layout.addWidget(self.persona_select)
         self.ai_layout.addLayout(self.persona_select_layout)
         

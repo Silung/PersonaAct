@@ -6,6 +6,7 @@ import sys
 import json
 import datetime
 import threading
+import random
 import uiautomator2 as u2
 import cv2
 import numpy as np
@@ -16,7 +17,7 @@ import pyaudio
 import logging
 from adbutils import adb
 from PySide6.QtGui import QImage, QKeyEvent, QMouseEvent, QPixmap, Qt
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog, QLabel, QSpinBox, QCheckBox, QGroupBox, QVBoxLayout, QHBoxLayout, QComboBox
 from PySide6.QtCore import QTimer, QSize
 from ui_main import Ui_MainWindow
 from pathlib import Path
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
         self.ai_max_history = 3
         self.ai_step_count = 0
         self.is_interacting = False
+        self.session_data = None  # 存储会话数据，用于生成最终结果
         
         # LLM延迟跟踪（用于watch函数补偿）
         self.llm_delay_history = []  # 最近10次延迟记录
@@ -76,6 +78,28 @@ class MainWindow(QMainWindow):
         self.output_dir = None
         self.session_dir = None
         
+        # （已移除无用的截图缓存功能）
+        
+        # 当前 XML 文本（异步获取）
+        self.current_xml_text = None
+        
+        # 休息功能相关
+        self.rest_enabled = False
+        self.work_duration = 30  # 工作时长（分钟）
+        self.rest_duration = 5  # 休息时长（分钟）
+        self.rest_random_offset = 2  # 随机偏移（分钟）
+        self.work_start_time = None  # 工作开始时间
+        self.is_resting = False  # 是否正在休息
+        self.rest_check_timer = QTimer()  # 检查休息时间的定时器
+        self.rest_check_timer.timeout.connect(self._check_rest_time)
+        self.current_platform = "bilibili"  # 当前平台
+        self.platform_packages = {
+            "bilibili": "tv.danmaku.bili",
+            "抖音": "com.ss.android.ugc.aweme",
+            "快手": "com.smile.gifmake",
+            "小红书": "com.xingin.xhs"
+        }
+        
         # 视频录制
         self.is_recording = False
         self.current_video_path = None
@@ -84,6 +108,7 @@ class MainWindow(QMainWindow):
         self.video_frame_count = 0
         self.video_fps = 30
         self.video_writer_lock = threading.Lock()  # 保护 video_writer 的线程锁
+        self.current_recording_start_time = None  # 记录录制开始时间
         
         # 音频录制
         self.is_audio_recording = False
@@ -137,7 +162,162 @@ class MainWindow(QMainWindow):
         self.ui.label.mousePressEvent = self.on_mouse_event(scrcpy.ACTION_DOWN)
         self.ui.label.mouseMoveEvent = self.on_mouse_event(scrcpy.ACTION_MOVE)
         self.ui.label.mouseReleaseEvent = self.on_mouse_event(scrcpy.ACTION_UP)
+        
+        # 初始化休息功能UI
+        self._init_rest_ui()
 
+    def _init_rest_ui(self):
+        """初始化休息功能UI"""
+        try:
+            # 创建休息功能分组框
+            rest_group = QGroupBox("休息设置")
+            rest_layout = QVBoxLayout()
+            
+            # 启用休息功能复选框
+            self.rest_enable_checkbox = QCheckBox("启用休息功能")
+            self.rest_enable_checkbox.stateChanged.connect(self._on_rest_enable_changed)
+            rest_layout.addWidget(self.rest_enable_checkbox)
+            
+            # 平台选择
+            platform_layout = QHBoxLayout()
+            platform_layout.addWidget(QLabel("平台:"))
+            self.platform_combo = QComboBox()
+            self.platform_combo.addItems(["bilibili", "抖音", "快手", "小红书"])
+            self.platform_combo.currentTextChanged.connect(self._on_platform_changed)
+            platform_layout.addWidget(self.platform_combo)
+            rest_layout.addLayout(platform_layout)
+            
+            # 工作时长
+            work_layout = QHBoxLayout()
+            work_layout.addWidget(QLabel("工作时长(分钟):"))
+            self.work_duration_spinbox = QSpinBox()
+            self.work_duration_spinbox.setRange(1, 180)
+            self.work_duration_spinbox.setValue(30)
+            self.work_duration_spinbox.valueChanged.connect(self._on_work_duration_changed)
+            work_layout.addWidget(self.work_duration_spinbox)
+            rest_layout.addLayout(work_layout)
+            
+            # 休息时长
+            rest_time_layout = QHBoxLayout()
+            rest_time_layout.addWidget(QLabel("休息时长(分钟):"))
+            self.rest_duration_spinbox = QSpinBox()
+            self.rest_duration_spinbox.setRange(1, 60)
+            self.rest_duration_spinbox.setValue(5)
+            self.rest_duration_spinbox.valueChanged.connect(self._on_rest_duration_changed)
+            rest_time_layout.addWidget(self.rest_duration_spinbox)
+            rest_layout.addLayout(rest_time_layout)
+            
+            # 随机偏移
+            offset_layout = QHBoxLayout()
+            offset_layout.addWidget(QLabel("随机偏移(分钟):"))
+            self.rest_offset_spinbox = QSpinBox()
+            self.rest_offset_spinbox.setRange(0, 30)
+            self.rest_offset_spinbox.setValue(2)
+            self.rest_offset_spinbox.valueChanged.connect(self._on_rest_offset_changed)
+            offset_layout.addWidget(self.rest_offset_spinbox)
+            rest_layout.addLayout(offset_layout)
+            
+            rest_group.setLayout(rest_layout)
+            
+            # 将分组框添加到左侧配置布局
+            if hasattr(self.ui, 'config_layout'):
+                self.ui.config_layout.addWidget(rest_group)
+                self.log_info("✅ 休息功能UI已添加")
+            else:
+                self.log_info("⚠️ 无法添加休息功能UI：找不到config_layout")
+        except Exception as e:
+            self.log_info(f"⚠️ 初始化休息功能UI失败: {e}")
+    
+    def _on_rest_enable_changed(self, state):
+        """休息功能启用状态改变"""
+        self.rest_enabled = (state == 2)  # Qt.Checked == 2
+        if self.rest_enabled:
+            self.log_info("✅ 休息功能已启用")
+        else:
+            self.log_info("❌ 休息功能已禁用")
+    
+    def _on_platform_changed(self, platform):
+        """平台改变"""
+        self.current_platform = platform
+        self.log_info(f"平台切换到: {platform}")
+    
+    def _on_work_duration_changed(self, value):
+        """工作时长改变"""
+        self.work_duration = value
+    
+    def _on_rest_duration_changed(self, value):
+        """休息时长改变"""
+        self.rest_duration = value
+    
+    def _on_rest_offset_changed(self, value):
+        """随机偏移改变"""
+        self.rest_random_offset = value
+    
+    def _check_rest_time(self):
+        """检查是否需要休息"""
+        if not self.rest_enabled or not self.is_interacting or self.is_resting:
+            return
+        
+        if self.work_start_time is None:
+            return
+        
+        # 计算已工作时间
+        elapsed_minutes = (time.time() - self.work_start_time) / 60
+        
+        # 计算随机工作时长
+        random_offset = random.uniform(-self.rest_random_offset, self.rest_random_offset)
+        target_work_duration = self.work_duration + random_offset
+        
+        if elapsed_minutes >= target_work_duration:
+            self.log_info(f"⏰ 已工作 {elapsed_minutes:.1f} 分钟，开始休息...")
+            threading.Thread(target=self._perform_rest, daemon=True).start()
+    
+    def _perform_rest(self):
+        """执行休息流程"""
+        self.is_resting = True
+        
+        try:
+            # 1. 关闭app
+            self.log_info(f"📱 关闭应用: {self.current_platform}")
+            package_name = self.platform_packages.get(self.current_platform, "tv.danmaku.bili")
+            result = self.adb_utils.execute_command(["shell", "am", "force-stop", package_name])
+            time.sleep(1)
+            
+            # 2. 返回桌面
+            self.log_info("🏠 返回桌面")
+            self.adb_utils.execute_command(["shell", "input", "keyevent", "KEYCODE_HOME"])
+            time.sleep(1)
+            
+            # 3. 计算随机休息时长
+            random_offset = random.uniform(-self.rest_random_offset, self.rest_random_offset)
+            actual_rest_duration = max(1, self.rest_duration + random_offset)
+            
+            self.log_info(f"😴 休息 {actual_rest_duration:.1f} 分钟...")
+            time.sleep(actual_rest_duration * 60)
+            
+            # 4. 打开app
+            self.log_info(f"📱 打开应用: {self.current_platform}")
+            self.adb_utils.execute_command([
+                "shell", "monkey", "-p", package_name, 
+                "-c", "android.intent.category.LAUNCHER", "1"
+            ])
+            time.sleep(3)
+            
+            # 5. 如果是bilibili，点击特定位置
+            if self.current_platform == "bilibili":
+                self.log_info("👆 点击 bilibili 特定位置(500, 600)")
+                self.u2_device.click(500, 600)
+                time.sleep(1)
+            
+            # 重置工作开始时间
+            self.work_start_time = time.time()
+            self.log_info("✅ 休息结束，继续工作")
+            
+        except Exception as e:
+            self.log_info(f"⚠️ 休息流程出错: {e}")
+        finally:
+            self.is_resting = False
+    
     def log_info(self, message):
         msg = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}"
         print(msg)
@@ -188,21 +368,28 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请输入模型URL")
             return
         
+        # 获取persona（必填）
+        persona_name = self.ui.persona_input.text().strip()
+        if not persona_name:
+            QMessageBox.warning(self, "提示", "请输入Persona名称（必填）")
+            return
+        
         self.ai_client = OpenAI(base_url=model_url, api_key="1234567890")
         self.ai_max_history = self.ui.history_spinbox.value()
         
-        persona_name = self.ui.persona_select.currentText()
-        if persona_name != "None":
-            self.ai_persona = self._load_persona(persona_name)
+        # 加载persona模板（如果选择了）
+        persona_template = self.ui.persona_select.currentText()
+        if persona_template != "None":
+            self.ai_persona = self._load_persona(persona_template)
         
         deploy_log_dir = Path(__file__).parent.parent / "deploy_log"
         deploy_log_dir.mkdir(exist_ok=True, parents=True)
         self.output_dir = deploy_log_dir
         
         session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        persona_suffix = f"_{persona_name}" if persona_name != "None" else "_no_persona"
-        self.session_dir = deploy_log_dir / f"{session_id}{persona_suffix}"
-        self.session_dir.mkdir(exist_ok=True)
+        # 使用persona作为目录名的一部分
+        self.session_dir = deploy_log_dir / persona_name / f"session_{session_id}"
+        self.session_dir.mkdir(exist_ok=True, parents=True)
         
         (self.session_dir / "screenshots").mkdir(exist_ok=True)
         (self.session_dir / "videos").mkdir(exist_ok=True)
@@ -213,12 +400,30 @@ class MainWindow(QMainWindow):
         self.ai_history_actions = []
         self.ai_step_count = 0
         
+        # 初始化会话数据，将persona保存在collector字段中
+        platform_name = self.current_platform  # 使用当前平台
+        
+        self.session_data = {
+            "session_id": session_id,
+            "collector": persona_name,  # persona保存在collector中
+            "platform": platform_name,
+            "start_time": datetime.datetime.now().isoformat(),
+            "actions": []
+        }
+        
         self.is_interacting = True
         self.ui.button_start.setEnabled(False)
         self.ui.button_stop.setEnabled(True)
         
         self.log_info(f"✅ 开始交互")
+        self.log_info(f"Persona: {persona_name}")
         self.log_info(f"输出目录: {self.session_dir}")
+        
+        # 启动休息功能定时器
+        if self.rest_enabled:
+            self.work_start_time = time.time()
+            self.rest_check_timer.start(30000)  # 每30秒检查一次
+            self.log_info(f"⏰ 休息功能已启动，工作 {self.work_duration} 分钟后休息 {self.rest_duration} 分钟")
         
         threading.Thread(target=self._interaction_loop, daemon=True).start()
 
@@ -230,10 +435,28 @@ class MainWindow(QMainWindow):
         self.ui.button_start.setEnabled(True)
         self.ui.button_stop.setEnabled(False)
         
+        # 停止休息检查定时器
+        if self.rest_check_timer.isActive():
+            self.rest_check_timer.stop()
+            self.log_info("⏰ 休息检查定时器已停止")
+        
         if self.is_recording:
             self.stop_recording(save_files=False)
         
-        self.log_info(f"✅ 交互结束，共 {self.ai_step_count} 步")
+        # 生成最终结果JSON
+        if self.session_data:
+            self.session_data["end_time"] = datetime.datetime.now().isoformat()
+            self.session_data["total_steps"] = self.ai_step_count
+            
+            # 保存最终会话文件
+            session_file = self.session_dir / f"session_{self.session_data['session_id']}.json"
+            with open(session_file, 'w', encoding='utf-8') as f:
+                json.dump(self.session_data, f, ensure_ascii=False, indent=2)
+            
+            self.log_info(f"✅ 最终结果已保存: {session_file.name}")
+            self.log_info(f"共 {self.ai_step_count} 步")
+        
+        self.log_info(f"✅ 交互结束")
 
     def _interaction_loop(self):
         while self.is_interacting:
@@ -249,27 +472,43 @@ class MainWindow(QMainWindow):
         self.log_info(f"{'='*50}")
         
         timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S%f")[:-3]
+        step_start_time = time.time()
         
+        # 1. 实时截图
         screenshot_filename = f"step_{self.ai_step_count}_{timestamp}.png"
         screenshot_path = self.session_dir / "screenshots" / screenshot_filename
         screenshot = self.u2_device.screenshot()
         screenshot.save(str(screenshot_path))
         self.log_info(f"📸 截图: {screenshot_filename}")
         
+        # 2. 使用异步获取的 XML
+        xml_path = None
         if self.ui.save_xml_checkbox.isChecked():
-            xml_filename = f"step_{self.ai_step_count}_{timestamp}.xml"
+            xml_filename = f"{timestamp}.xml"
             xml_path = self.session_dir / "xml" / xml_filename
-            xml_text = self.u2_device.dump_hierarchy()
-            xml_path.write_text(xml_text, encoding='utf-8')
-            self.log_info(f"📝 XML: {xml_filename}")
+            
+            # 优先使用异步获取的 XML
+            if self.current_xml_text is not None:
+                xml_path.write_text(self.current_xml_text, encoding='utf-8')
+                self.log_info(f"📝 XML: {xml_filename} (使用异步获取)")
+                self.current_xml_text = None  # 清空已使用的 XML
+            # 否则实时获取
+            else:
+                xml_text = self.u2_device.dump_hierarchy()
+                xml_path.write_text(xml_text, encoding='utf-8')
+                self.log_info(f"📝 XML: {xml_filename} (实时获取)")
         
+        # 3. 开始录制（如果需要）
+        video_path = None
+        audio_path = None
         if self.ui.save_video_checkbox.isChecked() or self.ui.save_audio_checkbox.isChecked():
-            video_path = self.session_dir / "videos" / f"step_{self.ai_step_count}_{timestamp}.mp4" if self.ui.save_video_checkbox.isChecked() else None
-            audio_path = self.session_dir / "audios" / f"step_{self.ai_step_count}_{timestamp}.wav" if self.ui.save_audio_checkbox.isChecked() else None
+            video_path = self.session_dir / "videos" / f"{timestamp}.mp4" if self.ui.save_video_checkbox.isChecked() else None
+            audio_path = self.session_dir / "audios" / f"{timestamp}.wav" if self.ui.save_audio_checkbox.isChecked() else None
             
             if video_path or audio_path:
                 self.start_recording(video_path, audio_path)
         
+        # 4. 调用LLM
         self.log_info(f"🤖 调用LLM...")
         response = self._get_ai_response(str(screenshot_path))
         self.log_info(f"响应:\n{response}")
@@ -280,29 +519,71 @@ class MainWindow(QMainWindow):
             return
         
         self.log_info(f"执行代码:")
+        # 解析代码中的动作
+        actions = self._parse_actions_from_code(code)
         self._execute_ai_code(code)
         
         if self.is_recording:
-            self.stop_recording(save_files=True)
+            stopped_video_path, stopped_audio_path = self.stop_recording(save_files=True)
+            # 使用实际保存的路径
+            if stopped_video_path:
+                video_path = stopped_video_path
+            if stopped_audio_path:
+                audio_path = stopped_audio_path
+        
+        # 计算观看时长（从步骤开始到结束）
+        viewing_duration = time.time() - step_start_time
         
         self.ai_history_screenshots.append(str(screenshot_path))
         self.ai_history_actions.append(f"```python\n{code}\n```")
         
-        step_data = {
-            "step": self.ai_step_count,
-            "timestamp": datetime.datetime.now().isoformat(),
-            "screenshot": str(screenshot_path),
-            "response": response,
-            "code": code
-        }
-        
-        step_file = self.session_dir / f"step_{self.ai_step_count}.json"
-        with open(step_file, 'w', encoding='utf-8') as f:
-            json.dump(step_data, f, ensure_ascii=False, indent=2)
+        # 将step信息直接添加到会话数据的actions中
+        if self.session_data:
+            # 计算相对于项目根目录的路径
+            project_root = Path(__file__).parent.parent
+            
+            action_entry = {
+                "step": self.ai_step_count,
+                "timestamp": timestamp,
+                "actions": actions,
+                "viewing_duration": round(viewing_duration, 2),
+                "screenshot": str(screenshot_path.relative_to(project_root)),
+                "response": response,
+                "code": code
+            }
+            
+            # 添加文件路径（相对于项目根目录）
+            if xml_path and xml_path.exists():
+                action_entry["xml_path"] = str(xml_path.relative_to(project_root))
+            if video_path and video_path.exists():
+                action_entry["video_path"] = str(video_path.relative_to(project_root))
+            if audio_path and audio_path.exists():
+                action_entry["audio_path"] = str(audio_path.relative_to(project_root))
+            
+            self.session_data["actions"].append(action_entry)
+            
+            # 实时保存会话文件（增量保存）
+            session_file = self.session_dir / f"session_{self.session_data['session_id']}.json"
+            with open(session_file, 'w', encoding='utf-8') as f:
+                json.dump(self.session_data, f, ensure_ascii=False, indent=2)
         
         self.u2_device.swipe(0.5, 0.8, 0.5, 0.2, duration=0.1)
         self.log_info(f"→ swipe up (下一个视频)")
         time.sleep(1)
+        
+        # 在 swipe 后异步获取下一个视频的 XML
+        def _fetch_next_xml():
+            time.sleep(1)  # 等待 1 秒让 UI 稳定
+            if self.u2_device:
+                try:
+                    self.current_xml_text = self.u2_device.dump_hierarchy()
+                    if self.current_xml_text:
+                        self.log_info(f"📝 XML已异步获取，大小: {len(self.current_xml_text)} chars")
+                except Exception as e:
+                    self.log_info(f"⚠️ XML异步获取失败: {e}")
+                    self.current_xml_text = None
+        
+        threading.Thread(target=_fetch_next_xml, daemon=True).start()
 
     def _get_ai_response(self, screenshot_path):
         use_persona = self.ui.persona_select.currentText() != "None"
@@ -387,6 +668,28 @@ class MainWindow(QMainWindow):
             return code
         
         return None
+    
+    def _parse_actions_from_code(self, code):
+        """从代码中解析动作（like, comment, share）"""
+        actions = []
+        
+        # 检查是否调用了like()
+        if re.search(r'\blike\s*\(', code):
+            actions.append({"type": "like"})
+        
+        # 检查是否调用了comment()
+        comment_match = re.search(r'\bcomment\s*\(\s*["\']?([^"\']*)["\']?\s*\)', code)
+        if comment_match:
+            comment_text = comment_match.group(1) if comment_match.group(1) else ""
+            actions.append({"type": "comment", "text": comment_text})
+        
+        # 检查是否调用了share()
+        share_match = re.search(r'\bshare\s*\(\s*["\']?([^"\']*)["\']?\s*\)', code)
+        if share_match:
+            share_who = share_match.group(1) if share_match.group(1) else ""
+            actions.append({"type": "share", "who": share_who})
+        
+        return actions
 
     def _execute_ai_code(self, code):
         screen_width, screen_height = self.u2_device.window_size()
@@ -460,6 +763,7 @@ class MainWindow(QMainWindow):
         self.audio_buffer = []
         self.is_recording = True
         self.is_audio_recording = True
+        self.current_recording_start_time = time.time()  # 记录录制开始时间
         
         return True
 
@@ -541,7 +845,7 @@ class MainWindow(QMainWindow):
         if self.is_audio_recording:
             audio_int16 = (audio_mono * 32767).astype(np.int16)
             self.audio_buffer.append(audio_int16.tobytes())
-
+    
     def choose_device(self, device):
         if device not in self.devices:
             msgBox = QMessageBox()
