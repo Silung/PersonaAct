@@ -76,6 +76,12 @@ class Ui_MainWindow(object):
         self.persona_select_layout.addWidget(self.persona_select)
         self.ai_layout.addLayout(self.persona_select_layout)
         
+        # 使用Persona复选框
+        self.use_persona_checkbox = QCheckBox("使用Persona")
+        self.use_persona_checkbox.setObjectName("use_persona_checkbox")
+        self.use_persona_checkbox.setChecked(True)  # 默认启用
+        self.ai_layout.addWidget(self.use_persona_checkbox)
+        
         self.history_layout = QHBoxLayout()
         self.label_history = QLabel("历史窗口:")
         self.history_spinbox = QSpinBox()
@@ -85,6 +91,28 @@ class Ui_MainWindow(object):
         self.history_layout.addWidget(self.label_history)
         self.history_layout.addWidget(self.history_spinbox)
         self.ai_layout.addLayout(self.history_layout)
+        
+        # 图片质量滑块
+        self.image_quality_layout = QVBoxLayout()
+        self.image_quality_label_layout = QHBoxLayout()
+        self.label_image_quality = QLabel("图片质量:")
+        self.image_quality_value_label = QLabel("85")
+        self.image_quality_value_label.setMinimumWidth(30)
+        self.image_quality_value_label.setAlignment(Qt.AlignRight)
+        self.image_quality_label_layout.addWidget(self.label_image_quality)
+        self.image_quality_label_layout.addStretch()
+        self.image_quality_label_layout.addWidget(self.image_quality_value_label)
+        self.image_quality_layout.addLayout(self.image_quality_label_layout)
+        
+        self.image_quality_slider = QSlider(Qt.Horizontal)
+        self.image_quality_slider.setObjectName("image_quality_slider")
+        self.image_quality_slider.setMinimum(1)
+        self.image_quality_slider.setMaximum(100)
+        self.image_quality_slider.setValue(85)
+        self.image_quality_slider.setTickPosition(QSlider.TicksBelow)
+        self.image_quality_slider.setTickInterval(10)
+        self.image_quality_layout.addWidget(self.image_quality_slider)
+        self.ai_layout.addLayout(self.image_quality_layout)
         
         self.button_test_model = QPushButton("测试模型连接")
         self.button_test_model.setObjectName("button_test_model")
@@ -109,6 +137,18 @@ class Ui_MainWindow(object):
         
         self.control_layout.addWidget(self.button_start)
         self.control_layout.addWidget(self.button_stop)
+        
+        # 状态显示
+        self.status_label = QLabel("状态: 未交互")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("QLabel { font-size: 14px; font-weight: bold; color: #9E9E9E; padding: 8px; background-color: #F5F5F5; border-radius: 5px; }")
+        self.control_layout.addWidget(self.status_label)
+        
+        # 详细信息显示
+        self.info_label = QLabel("会话: 未开始\n平台: -\n运行时长: 0分钟")
+        self.info_label.setAlignment(Qt.AlignCenter)
+        self.info_label.setStyleSheet("QLabel { font-size: 12px; color: #666; padding: 5px; }")
+        self.control_layout.addWidget(self.info_label)
         
         self.step_label = QLabel("步数: 0")
         self.step_label.setAlignment(Qt.AlignCenter)

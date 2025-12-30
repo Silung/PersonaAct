@@ -7,6 +7,7 @@ import json
 import datetime
 import threading
 import random
+import queue
 import uiautomator2 as u2
 import cv2
 import numpy as np
@@ -28,6 +29,9 @@ import scrcpy
 sys.path.append(str(Path(__file__).parent.parent))
 from prompts import get_system_prompt, get_user_prompt
 from openai import OpenAI
+
+# 图片压缩配置：最大像素数（与训练时保持一致）
+MAX_PIXELS = 288000  # 训练时设置的 MAX_PIXELS
 
 if not QApplication.instance():
     app = QApplication([])
@@ -73,6 +77,7 @@ class MainWindow(QMainWindow):
         self.llm_delay_history = []  # 最近10次延迟记录
         self.llm_delay_max_history = 10  # 最多保存10次延迟
         self.llm_avg_delay = 1.0  # 初始延迟1秒
+        self.llm_start_time_after_swipe = None  # 下滑后1秒的时间点（作为延迟计算起点）
         
         # 输出目录
         self.output_dir = None
@@ -93,6 +98,12 @@ class MainWindow(QMainWindow):
         self.rest_check_timer = QTimer()  # 检查休息时间的定时器
         self.rest_check_timer.timeout.connect(self._check_rest_time)
         self.current_platform = "bilibili"  # 当前平台
+        
+        # 状态更新定时器
+        self.status_update_timer = QTimer()
+        self.status_update_timer.timeout.connect(self._update_status_info)
+        self.status_update_timer.start(1000)  # 每秒更新一次
+        self.interaction_start_time = None  # 交互开始时间
         self.platform_packages = {
             "bilibili": "tv.danmaku.bili",
             "抖音": "com.ss.android.ugc.aweme",
@@ -109,6 +120,11 @@ class MainWindow(QMainWindow):
         self.video_fps = 30
         self.video_writer_lock = threading.Lock()  # 保护 video_writer 的线程锁
         self.current_recording_start_time = None  # 记录录制开始时间
+        
+        # 异步视频写入队列
+        self.video_frame_queue = queue.Queue(maxsize=120)  # 最多缓存4秒视频（30fps）
+        self.video_write_thread = None
+        self.video_write_thread_running = False
         
         # 音频录制
         self.is_audio_recording = False
@@ -157,6 +173,7 @@ class MainWindow(QMainWindow):
         self.ui.flip.stateChanged.connect(self.on_flip)
         self.ui.persona_select.currentTextChanged.connect(self.on_persona_changed)
         self.ui.button_toggle_pointer.clicked.connect(self.toggle_pointer_location)
+        self.ui.image_quality_slider.valueChanged.connect(self.on_image_quality_changed)
         
         # Bind mouse event for controlling device
         self.ui.label.mousePressEvent = self.on_mouse_event(scrcpy.ACTION_DOWN)
@@ -165,6 +182,9 @@ class MainWindow(QMainWindow):
         
         # 初始化休息功能UI
         self._init_rest_ui()
+        
+        # 初始化图片质量显示
+        self.ui.image_quality_value_label.setText(str(self.ui.image_quality_slider.value()))
 
     def _init_rest_ui(self):
         """初始化休息功能UI"""
@@ -253,6 +273,49 @@ class MainWindow(QMainWindow):
         """随机偏移改变"""
         self.rest_random_offset = value
     
+    def _set_rest_controls_enabled(self, enabled: bool):
+        """启用或禁用休息设置控件
+        
+        Args:
+            enabled: True表示启用，False表示禁用
+        """
+        if hasattr(self, 'rest_enable_checkbox'):
+            self.rest_enable_checkbox.setEnabled(enabled)
+        if hasattr(self, 'platform_combo'):
+            self.platform_combo.setEnabled(enabled)
+        if hasattr(self, 'work_duration_spinbox'):
+            self.work_duration_spinbox.setEnabled(enabled)
+        if hasattr(self, 'rest_duration_spinbox'):
+            self.rest_duration_spinbox.setEnabled(enabled)
+        if hasattr(self, 'rest_offset_spinbox'):
+            self.rest_offset_spinbox.setEnabled(enabled)
+    
+    def _set_all_config_enabled(self, enabled: bool):
+        """启用或禁用所有配置控件（在交互状态下锁定配置）
+        
+        Args:
+            enabled: True表示启用，False表示禁用
+        """
+        # 设备配置
+        self.ui.combo_device.setEnabled(enabled)
+        self.ui.flip.setEnabled(enabled)
+        
+        # AI配置
+        self.ui.model_url_input.setEnabled(enabled)
+        self.ui.persona_input.setEnabled(enabled)
+        self.ui.persona_select.setEnabled(enabled)
+        self.ui.use_persona_checkbox.setEnabled(enabled)
+        self.ui.history_spinbox.setEnabled(enabled)
+        self.ui.button_test_model.setEnabled(enabled)
+        
+        # 输出配置
+        self.ui.save_video_checkbox.setEnabled(enabled)
+        self.ui.save_audio_checkbox.setEnabled(enabled)
+        self.ui.save_xml_checkbox.setEnabled(enabled)
+        
+        # 休息设置
+        self._set_rest_controls_enabled(enabled)
+    
     def _check_rest_time(self):
         """检查是否需要休息"""
         if not self.rest_enabled or not self.is_interacting or self.is_resting:
@@ -275,6 +338,10 @@ class MainWindow(QMainWindow):
     def _perform_rest(self):
         """执行休息流程"""
         self.is_resting = True
+        
+        # 更新状态显示为休息中
+        self.ui.status_label.setText("状态: 休息中")
+        self.ui.status_label.setStyleSheet("QLabel { font-size: 14px; font-weight: bold; color: #FF9800; padding: 8px; background-color: #FFF3E0; border-radius: 5px; }")
         
         try:
             # 1. 关闭app
@@ -313,10 +380,36 @@ class MainWindow(QMainWindow):
             self.work_start_time = time.time()
             self.log_info("✅ 休息结束，继续工作")
             
+            # 恢复状态显示为正在交互
+            self.ui.status_label.setText("状态: 正在交互")
+            self.ui.status_label.setStyleSheet("QLabel { font-size: 14px; font-weight: bold; color: #4CAF50; padding: 8px; background-color: #E8F5E9; border-radius: 5px; }")
+            
         except Exception as e:
             self.log_info(f"⚠️ 休息流程出错: {e}")
         finally:
             self.is_resting = False
+    
+    def _update_status_info(self):
+        """更新状态详细信息（每秒调用一次）"""
+        if not self.is_interacting:
+            self.ui.info_label.setText("会话: 未开始\n平台: -\n运行时长: 0分钟")
+            return
+        
+        # 计算运行时长
+        if self.interaction_start_time:
+            elapsed = time.time() - self.interaction_start_time
+            minutes = int(elapsed / 60)
+            seconds = int(elapsed % 60)
+            duration_str = f"{minutes}分{seconds}秒"
+        else:
+            duration_str = "0分钟"
+        
+        # 获取会话ID
+        session_id = self.session_data.get('session_id', 'unknown') if self.session_data else 'unknown'
+        
+        # 更新显示
+        info_text = f"会话: {session_id}\n平台: {self.current_platform}\n运行时长: {duration_str}"
+        self.ui.info_label.setText(info_text)
     
     def log_info(self, message):
         msg = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}"
@@ -327,6 +420,10 @@ class MainWindow(QMainWindow):
 
     def on_persona_changed(self):
         self.ai_persona = None
+    
+    def on_image_quality_changed(self, value):
+        """图片质量滑块值改变时的回调"""
+        self.ui.image_quality_value_label.setText(str(value))
 
     def test_model_connection(self):
         model_url = self.ui.model_url_input.text().strip()
@@ -334,17 +431,132 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请输入模型URL")
             return
         
-        self.log_info(f"测试模型连接: {model_url}")
+        # 检查设备是否可用
+        if not hasattr(self, 'u2_device') or self.u2_device is None:
+            QMessageBox.warning(self, "提示", "设备未连接，无法截图")
+            return
         
-        test_client = OpenAI(base_url=model_url, api_key="1234567890")
-        response = test_client.chat.completions.create(
-            model="qwen",
-            messages=[{"role": "user", "content": "hello"}],
-            max_tokens=10,
-            temperature=0.0
-        )
-        self.log_info(f"✅ 模型连接成功")
-        QMessageBox.information(self, "成功", "模型连接成功！")
+        self.log_info(f"测试模型连接: {model_url}")
+        self.log_info(f"正在截图...")
+        
+        try:
+            # 1. 截图
+            screenshot = self.u2_device.screenshot()
+            
+            # 2. 保存到临时文件
+            import tempfile
+            temp_dir = Path(tempfile.gettempdir())
+            timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S%f")[:-3]
+            test_screenshot_path = temp_dir / f"test_screenshot_{timestamp}.png"
+            screenshot.save(str(test_screenshot_path))
+            self.log_info(f"✅ 截图已保存: {test_screenshot_path.name}")
+            
+            # 3. 创建测试客户端
+            test_client = OpenAI(base_url=model_url, api_key="1234567890")
+            
+            # 4. 加载persona（如果选择了且启用了使用Persona）
+            persona_template = self.ui.persona_select.currentText()
+            use_persona = self.ui.use_persona_checkbox.isChecked() and persona_template != "None"
+            test_persona = None
+            if use_persona:
+                test_persona = self._load_persona(persona_template)
+            
+            # 5. 构建prompt（测试模式，不使用历史记录）
+            system_prompt = get_system_prompt(use_persona, test_persona)
+            user_prompt = get_user_prompt(
+                history_screenshots=None,
+                history_actions=None,
+                current_screenshots=[str(test_screenshot_path)],
+                audio_transcript=None
+            )
+            
+            # 6. 编码图片
+            import base64
+            from PIL import Image
+            import io
+            
+            # 获取图片质量滑块的值
+            image_quality = self.ui.image_quality_slider.value()
+            
+            def encode_image(image_path, max_pixels=MAX_PIXELS, quality=85):
+                img = Image.open(image_path)
+                width, height = img.size
+                total_pixels = width * height
+                
+                # 如果总像素数超过限制，按比例缩放
+                if total_pixels > max_pixels:
+                    import math
+                    scale = math.sqrt(max_pixels / total_pixels)
+                    new_width = int(width * scale)
+                    new_height = int(height * scale)
+                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                if img.mode == 'RGBA':
+                    img = img.convert('RGB')
+                
+                buffer = io.BytesIO()
+                img.save(buffer, format='JPEG', quality=quality, optimize=True)
+                buffer.seek(0)
+                encoded = base64.b64encode(buffer.read()).decode('utf-8')
+                return encoded
+            
+            # 7. 构建消息
+            base64_image = encode_image(str(test_screenshot_path), quality=image_quality)
+            user_content = [
+                {"type": "text", "text": user_prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_image}"
+                    }
+                }
+            ]
+            
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ]
+            
+            # 8. 调用LLM（记录延迟）
+            self.log_info(f"🤖 正在调用LLM...")
+            llm_start_time = time.time()
+            
+            response = test_client.chat.completions.create(
+                model="qwen",
+                messages=messages,
+                max_tokens=256,
+                temperature=0.0
+            )
+            
+            llm_end_time = time.time()
+            llm_delay = llm_end_time - llm_start_time
+            
+            response_text = response.choices[0].message.content
+            self.log_info(f"✅ 模型连接成功")
+            self.log_info(f"⏱️ LLM推理延迟: {llm_delay:.2f}秒")
+            self.log_info(f"📝 AI回复:\n{response_text}")
+            
+            # 9. 显示结果对话框（包含延迟信息）
+            msg = QMessageBox(self)
+            msg.setWindowTitle("测试结果")
+            msg.setText("模型连接成功！")
+            delay_info = f"推理延迟: {llm_delay:.2f}秒\n\n"
+            msg.setInformativeText(f"{delay_info}AI回复:\n\n{response_text[:450]}{'...' if len(response_text) > 450 else ''}")
+            msg.setDetailedText(f"推理延迟: {llm_delay:.2f}秒\n\n完整回复:\n{response_text}")
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.exec()
+            
+            # 10. 清理临时文件
+            try:
+                if test_screenshot_path.exists():
+                    test_screenshot_path.unlink()
+            except Exception as e:
+                self.log_info(f"⚠️ 清理临时文件失败: {e}")
+                
+        except Exception as e:
+            error_msg = str(e)
+            self.log_info(f"❌ 测试失败: {error_msg}")
+            QMessageBox.critical(self, "测试失败", f"测试过程中出现错误:\n\n{error_msg}")
 
     def _load_persona(self, persona_name):
         persona_path = Path(__file__).parent.parent / "data" / persona_name / "persona.json"
@@ -377,18 +589,21 @@ class MainWindow(QMainWindow):
         self.ai_client = OpenAI(base_url=model_url, api_key="1234567890")
         self.ai_max_history = self.ui.history_spinbox.value()
         
-        # 加载persona模板（如果选择了）
+        # 加载persona模板（如果选择了且启用了使用Persona）
         persona_template = self.ui.persona_select.currentText()
-        if persona_template != "None":
+        use_persona = self.ui.use_persona_checkbox.isChecked() and persona_template != "None"
+        if use_persona:
             self.ai_persona = self._load_persona(persona_template)
+        else:
+            self.ai_persona = None
         
         deploy_log_dir = Path(__file__).parent.parent / "deploy_log"
         deploy_log_dir.mkdir(exist_ok=True, parents=True)
         self.output_dir = deploy_log_dir
         
         session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        # 使用persona作为目录名的一部分
-        self.session_dir = deploy_log_dir / persona_name / f"session_{session_id}"
+        # 使用persona作为目录名，同一个人设下的不同session放在一起
+        self.session_dir = deploy_log_dir / persona_name
         self.session_dir.mkdir(exist_ok=True, parents=True)
         
         (self.session_dir / "screenshots").mkdir(exist_ok=True)
@@ -412,8 +627,16 @@ class MainWindow(QMainWindow):
         }
         
         self.is_interacting = True
+        self.interaction_start_time = time.time()  # 记录开始时间
         self.ui.button_start.setEnabled(False)
         self.ui.button_stop.setEnabled(True)
+        
+        # 禁用所有配置控件（锁定配置）
+        self._set_all_config_enabled(False)
+        
+        # 更新状态显示
+        self.ui.status_label.setText("状态: 正在交互")
+        self.ui.status_label.setStyleSheet("QLabel { font-size: 14px; font-weight: bold; color: #4CAF50; padding: 8px; background-color: #E8F5E9; border-radius: 5px; }")
         
         self.log_info(f"✅ 开始交互")
         self.log_info(f"Persona: {persona_name}")
@@ -432,8 +655,16 @@ class MainWindow(QMainWindow):
             return
         
         self.is_interacting = False
+        self.interaction_start_time = None  # 重置开始时间
         self.ui.button_start.setEnabled(True)
         self.ui.button_stop.setEnabled(False)
+        
+        # 重新启用所有配置控件
+        self._set_all_config_enabled(True)
+        
+        # 更新状态显示
+        self.ui.status_label.setText("状态: 未交互")
+        self.ui.status_label.setStyleSheet("QLabel { font-size: 14px; font-weight: bold; color: #9E9E9E; padding: 8px; background-color: #F5F5F5; border-radius: 5px; }")
         
         # 停止休息检查定时器
         if self.rest_check_timer.isActive():
@@ -448,7 +679,7 @@ class MainWindow(QMainWindow):
             self.session_data["end_time"] = datetime.datetime.now().isoformat()
             self.session_data["total_steps"] = self.ai_step_count
             
-            # 保存最终会话文件
+            # 保存最终会话文件（直接保存在persona目录下）
             session_file = self.session_dir / f"session_{self.session_data['session_id']}.json"
             with open(session_file, 'w', encoding='utf-8') as f:
                 json.dump(self.session_data, f, ensure_ascii=False, indent=2)
@@ -513,6 +744,7 @@ class MainWindow(QMainWindow):
         response = self._get_ai_response(str(screenshot_path))
         self.log_info(f"响应:\n{response}")
         
+        # 5. 解析代码
         code = self._parse_code(response)
         if not code:
             self.log_info(f"⚠️ 未找到代码块")
@@ -521,8 +753,11 @@ class MainWindow(QMainWindow):
         self.log_info(f"执行代码:")
         # 解析代码中的动作
         actions = self._parse_actions_from_code(code)
+        
+        # 6. 执行代码
         self._execute_ai_code(code)
         
+        # 7. 停止录制
         if self.is_recording:
             stopped_video_path, stopped_audio_path = self.stop_recording(save_files=True)
             # 使用实际保存的路径
@@ -534,10 +769,11 @@ class MainWindow(QMainWindow):
         # 计算观看时长（从步骤开始到结束）
         viewing_duration = time.time() - step_start_time
         
+        # 8. 保存历史数据
         self.ai_history_screenshots.append(str(screenshot_path))
         self.ai_history_actions.append(f"```python\n{code}\n```")
         
-        # 将step信息直接添加到会话数据的actions中
+        # 9. 保存会话数据到JSON
         if self.session_data:
             # 计算相对于项目根目录的路径
             project_root = Path(__file__).parent.parent
@@ -567,9 +803,13 @@ class MainWindow(QMainWindow):
             with open(session_file, 'w', encoding='utf-8') as f:
                 json.dump(self.session_data, f, ensure_ascii=False, indent=2)
         
+        # 10. 滑动到下一个视频
         self.u2_device.swipe(0.5, 0.8, 0.5, 0.2, duration=0.1)
         self.log_info(f"→ swipe up (下一个视频)")
         time.sleep(1)
+        
+        # 记录下滑后1秒的时间点，作为下一次延迟计算的起点
+        self.llm_start_time_after_swipe = time.time()
         
         # 在 swipe 后异步获取下一个视频的 XML
         def _fetch_next_xml():
@@ -586,12 +826,17 @@ class MainWindow(QMainWindow):
         threading.Thread(target=_fetch_next_xml, daemon=True).start()
 
     def _get_ai_response(self, screenshot_path):
-        use_persona = self.ui.persona_select.currentText() != "None"
+        # 根据复选框和模板选择决定是否使用persona
+        persona_template = self.ui.persona_select.currentText()
+        use_persona = self.ui.use_persona_checkbox.isChecked() and persona_template != "None"
+        
+        # 每次调用时都从UI读取历史窗口大小（确保使用最新值）
+        current_max_history = self.ui.history_spinbox.value()
         
         system_prompt = get_system_prompt(use_persona, self.ai_persona)
         user_prompt = get_user_prompt(
-            history_screenshots=self.ai_history_screenshots[-self.ai_max_history:] if self.ai_history_screenshots else None,
-            history_actions=self.ai_history_actions[-self.ai_max_history:] if self.ai_history_actions else None,
+            history_screenshots=self.ai_history_screenshots[-current_max_history:] if self.ai_history_screenshots else None,
+            history_actions=self.ai_history_actions[-current_max_history:] if self.ai_history_actions else None,
             current_screenshots=[screenshot_path],
             audio_transcript=None
         )
@@ -599,15 +844,56 @@ class MainWindow(QMainWindow):
         # 收集所有图像
         all_images = []
         if self.ai_history_screenshots:
-            all_images.extend(self.ai_history_screenshots[-self.ai_max_history:])
+            all_images.extend(self.ai_history_screenshots[-current_max_history:])
         all_images.append(screenshot_path)
         
         # 将图像编码为base64并构建消息内容
         import base64
+        from PIL import Image
+        import io
         
-        def encode_image(image_path):
-            with open(image_path, "rb") as image_file:
-                return base64.b64encode(image_file.read()).decode('utf-8')
+        # 获取图片质量滑块的值
+        image_quality = self.ui.image_quality_slider.value()
+        
+        def encode_image(image_path, max_pixels=MAX_PIXELS, quality=85):
+            """压缩并编码图片
+            
+            Args:
+                image_path: 图片路径
+                max_pixels: 最大像素数（宽*高），默认288000（与训练时保持一致）
+                quality: JPEG质量（1-100）
+            """
+            import math
+            
+            # 打开图片
+            img = Image.open(image_path)
+            
+            # 如果图片总像素数超过限制，进行压缩
+            width, height = img.size
+            total_pixels = width * height
+            
+            if total_pixels > max_pixels:
+                # 计算缩放比例（保持宽高比）
+                scale = math.sqrt(max_pixels / total_pixels)
+                new_width = int(width * scale)
+                new_height = int(height * scale)
+                
+                # 缩放图片
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # 转换为RGB（如果是RGBA）
+            if img.mode == 'RGBA':
+                img = img.convert('RGB')
+            
+            # 保存到内存缓冲区
+            buffer = io.BytesIO()
+            img.save(buffer, format='JPEG', quality=quality, optimize=True)
+            buffer.seek(0)
+            
+            # 编码为base64
+            encoded = base64.b64encode(buffer.read()).decode('utf-8')
+            
+            return encoded
         
         # 构建用户消息内容，包含文本和图像
         user_content = []
@@ -620,7 +906,7 @@ class MainWindow(QMainWindow):
         
         # 添加所有图像
         for img_path in all_images:
-            base64_image = encode_image(img_path)
+            base64_image = encode_image(img_path, quality=image_quality)
             user_content.append({
                 "type": "image_url",
                 "image_url": {
@@ -633,8 +919,13 @@ class MainWindow(QMainWindow):
             {"role": "user", "content": user_content}
         ]
         
-        # 记录LLM调用前的时间
-        llm_start_time = time.time()
+        # 如果已经记录了下滑后1秒的时间点，使用它作为延迟计算的起点
+        # 否则使用当前时间（第一次调用时）
+        if self.llm_start_time_after_swipe is not None:
+            llm_start_time = self.llm_start_time_after_swipe
+            self.llm_start_time_after_swipe = None  # 清空，等待下一次下滑后设置
+        else:
+            llm_start_time = time.time()
         
         response = self.ai_client.chat.completions.create(
             model="qwen",
@@ -643,7 +934,7 @@ class MainWindow(QMainWindow):
             temperature=0.0
         )
         
-        # 记录LLM返回后的时间，计算延迟
+        # 记录LLM返回后的时间，计算延迟（从下滑后1秒到LLM返回的时间）
         llm_end_time = time.time()
         llm_delay = llm_end_time - llm_start_time
         
@@ -654,8 +945,6 @@ class MainWindow(QMainWindow):
         
         # 计算最近10次延迟的均值
         self.llm_avg_delay = sum(self.llm_delay_history) / len(self.llm_delay_history)
-        
-        self.log_info(f"⏱️ LLM延迟: {llm_delay:.3f}s, 平均延迟: {self.llm_avg_delay:.3f}s")
         
         return response.choices[0].message.content
 
@@ -705,7 +994,7 @@ class MainWindow(QMainWindow):
         def watch(second=5.0):
             # 减去LLM延迟（从query到回复的时间）
             adjusted_second = max(0.0, second - self.llm_avg_delay)
-            self.log_info(f"  → watch({second}s, 减去延迟{self.llm_avg_delay:.3f}s, 实际等待{adjusted_second:.3f}s)")
+            self.log_info(f"  → watch({second}s)")
             if adjusted_second > 0:
                 time.sleep(adjusted_second)
         
@@ -751,6 +1040,34 @@ class MainWindow(QMainWindow):
         
         exec(code, {}, local_vars)
 
+    def _video_write_worker(self):
+        """后台线程：异步写入视频帧"""
+        while self.video_write_thread_running:
+            try:
+                # 从队列获取帧，超时1秒
+                frame_data = self.video_frame_queue.get(timeout=1.0)
+                
+                if frame_data is None:
+                    # None 是停止信号
+                    break
+                
+                frame, video_writer = frame_data
+                
+                # 写入视频帧
+                if video_writer and video_writer.isOpened():
+                    try:
+                        video_writer.write(frame)
+                        self.video_frame_count += 1
+                    except Exception as e:
+                        self.log_info(f"⚠️ 后台写入视频帧失败: {e}")
+                
+                self.video_frame_queue.task_done()
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.log_info(f"⚠️ 视频写入线程异常: {e}")
+    
     def start_recording(self, video_path, audio_path):
         if self.is_recording:
             self.stop_recording()
@@ -764,6 +1081,20 @@ class MainWindow(QMainWindow):
         self.is_recording = True
         self.is_audio_recording = True
         self.current_recording_start_time = time.time()  # 记录录制开始时间
+        
+        # 清空队列
+        while not self.video_frame_queue.empty():
+            try:
+                self.video_frame_queue.get_nowait()
+            except queue.Empty:
+                break
+        
+        # 启动后台写入线程
+        if not self.video_write_thread_running:
+            self.video_write_thread_running = True
+            self.video_write_thread = threading.Thread(target=self._video_write_worker, daemon=True)
+            self.video_write_thread.start()
+            self.log_info("✅ 视频异步写入线程已启动")
         
         return True
 
@@ -779,6 +1110,17 @@ class MainWindow(QMainWindow):
         # 先设置标志，阻止新的写入
         self.is_recording = False
         self.is_audio_recording = False
+        
+        # 等待视频队列清空（最多等待3秒）
+        queue_wait_start = time.time()
+        while not self.video_frame_queue.empty():
+            if time.time() - queue_wait_start > 3.0:
+                self.log_info(f"⚠️ 视频队列等待超时，队列剩余: {self.video_frame_queue.qsize()} 帧")
+                break
+            time.sleep(0.1)
+        
+        if self.video_frame_queue.empty():
+            self.log_info(f"✅ 视频队列已清空")
         
         video_path = self.current_video_path
         audio_path = self.current_audio_path
@@ -974,7 +1316,7 @@ class MainWindow(QMainWindow):
                 self.last_display_size = current_size
                 self.window_size_initialized = True
             
-            # 如果正在录制，直接写入视频文件
+            # 如果正在录制，将帧放入异步队列
             if self.is_recording:
                 with self.video_writer_lock:
                     if self.video_writer is None:
@@ -999,19 +1341,16 @@ class MainWindow(QMainWindow):
                             self.video_writer = None
                             return
                     
+                    # 将帧放入异步队列（非阻塞）
                     if self.video_writer and self.video_writer.isOpened():
                         try:
-                            self.video_writer.write(frame)
-                            self.video_frame_count += 1
-                        except Exception as e:
-                            # 捕获 OpenCV 的 C++ 异常
-                            self.log_info(f"⚠️ 写入视频帧失败: {e}")
-                            # 如果写入失败，关闭 writer 避免后续错误
-                            try:
-                                self.video_writer.release()
-                            except:
-                                pass
-                            self.video_writer = None
+                            # 复制帧数据，避免引用问题
+                            frame_copy = frame.copy()
+                            # 非阻塞放入队列
+                            self.video_frame_queue.put_nowait((frame_copy, self.video_writer))
+                        except queue.Full:
+                            # 队列满了，丢弃这一帧
+                            pass
             
     def update_window_size(self, display_width, display_height):
         left_panel_width = 400
@@ -1033,6 +1372,19 @@ class MainWindow(QMainWindow):
         self.resize(window_width, window_height)
 
     def closeEvent(self, _):
+        # 停止视频写入线程
+        if self.video_write_thread_running:
+            self.video_write_thread_running = False
+            # 发送停止信号
+            try:
+                self.video_frame_queue.put_nowait(None)
+            except queue.Full:
+                pass
+            # 等待线程结束
+            if self.video_write_thread:
+                self.video_write_thread.join(timeout=2.0)
+            self.log_info("✅ 视频写入线程已停止")
+        
         if self.is_recording:
             video_path = self.current_video_path
             self.is_recording = False
