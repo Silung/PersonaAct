@@ -67,6 +67,11 @@ class MainWindow(QMainWindow):
         self.ai_step_count = 0
         self.is_interacting = False
         
+        # LLM延迟跟踪（用于watch函数补偿）
+        self.llm_delay_history = []  # 最近10次延迟记录
+        self.llm_delay_max_history = 10  # 最多保存10次延迟
+        self.llm_avg_delay = 1.0  # 初始延迟1秒
+        
         # 输出目录
         self.output_dir = None
         self.session_dir = None
@@ -346,12 +351,29 @@ class MainWindow(QMainWindow):
             {"role": "user", "content": user_content}
         ]
         
+        # 记录LLM调用前的时间
+        llm_start_time = time.time()
+        
         response = self.ai_client.chat.completions.create(
             model="qwen",
             messages=messages,
             max_tokens=256,
             temperature=0.0
         )
+        
+        # 记录LLM返回后的时间，计算延迟
+        llm_end_time = time.time()
+        llm_delay = llm_end_time - llm_start_time
+        
+        # 更新延迟历史记录（平滑算法：保留最近10次）
+        self.llm_delay_history.append(llm_delay)
+        if len(self.llm_delay_history) > self.llm_delay_max_history:
+            self.llm_delay_history.pop(0)  # 移除最旧的记录
+        
+        # 计算最近10次延迟的均值
+        self.llm_avg_delay = sum(self.llm_delay_history) / len(self.llm_delay_history)
+        
+        self.log_info(f"⏱️ LLM延迟: {llm_delay:.3f}s, 平均延迟: {self.llm_avg_delay:.3f}s")
         
         return response.choices[0].message.content
 
@@ -377,8 +399,11 @@ class MainWindow(QMainWindow):
             self.log_info(f"  → swipe({x1}, {y1}, {x2}, {y2})")
         
         def watch(second=2.0):
-            self.log_info(f"  → watch({second}s)")
-            time.sleep(second)
+            # 减去LLM延迟（从query到回复的时间）
+            adjusted_second = max(0.0, second - self.llm_avg_delay)
+            self.log_info(f"  → watch({second}s, 减去延迟{self.llm_avg_delay:.3f}s, 实际等待{adjusted_second:.3f}s)")
+            if adjusted_second > 0:
+                time.sleep(adjusted_second)
         
         def like():
             # like_x = int(screen_width * 0.95)
