@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         self.video_writer = None
         self.video_frame_count = 0
         self.video_fps = 30
+        self.video_writer_lock = threading.Lock()  # 保护 video_writer 的线程锁
         
         # 音频录制
         self.is_audio_recording = False
@@ -453,7 +454,8 @@ class MainWindow(QMainWindow):
         
         self.current_video_path = video_path
         self.current_audio_path = audio_path
-        self.video_writer = None
+        with self.video_writer_lock:
+            self.video_writer = None
         self.video_frame_count = 0
         self.audio_buffer = []
         self.is_recording = True
@@ -478,10 +480,13 @@ class MainWindow(QMainWindow):
         audio_path = self.current_audio_path
         frame_count = self.video_frame_count
         audio_data = self.audio_buffer.copy() if save_files else []
-        video_writer = self.video_writer
         
-        # 清空引用，防止on_frame继续写入
-        self.video_writer = None
+        # 使用锁保护 video_writer 的访问
+        with self.video_writer_lock:
+            video_writer = self.video_writer
+            # 清空引用，防止on_frame继续写入
+            self.video_writer = None
+        
         self.video_frame_count = 0
         self.audio_buffer = []
         
@@ -667,26 +672,42 @@ class MainWindow(QMainWindow):
             
             # 如果正在录制，直接写入视频文件
             if self.is_recording:
-                if self.video_writer is None:
-                    # 第一帧到来时初始化VideoWriter
-                    height, width = frame.shape[:2]
-                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                    self.video_writer = cv2.VideoWriter(
-                        str(self.current_video_path), 
-                        fourcc, 
-                        self.video_fps, 
-                        (width, height)
-                    )
-                    if self.video_writer.isOpened():
-                        self.log_info(f"✅ VideoWriter初始化成功 ({width}x{height})")
-                    else:
-                        self.log_info(f"⚠️ VideoWriter初始化失败")
-                        self.video_writer = None
-                        return
-                
-                if self.video_writer:
-                    self.video_writer.write(frame)
-                    self.video_frame_count += 1
+                with self.video_writer_lock:
+                    if self.video_writer is None:
+                        # 第一帧到来时初始化VideoWriter
+                        try:
+                            height, width = frame.shape[:2]
+                            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                            self.video_writer = cv2.VideoWriter(
+                                str(self.current_video_path), 
+                                fourcc, 
+                                self.video_fps, 
+                                (width, height)
+                            )
+                            if self.video_writer.isOpened():
+                                self.log_info(f"✅ VideoWriter初始化成功 ({width}x{height})")
+                            else:
+                                self.log_info(f"⚠️ VideoWriter初始化失败")
+                                self.video_writer = None
+                                return
+                        except Exception as e:
+                            self.log_info(f"⚠️ VideoWriter初始化异常: {e}")
+                            self.video_writer = None
+                            return
+                    
+                    if self.video_writer and self.video_writer.isOpened():
+                        try:
+                            self.video_writer.write(frame)
+                            self.video_frame_count += 1
+                        except Exception as e:
+                            # 捕获 OpenCV 的 C++ 异常
+                            self.log_info(f"⚠️ 写入视频帧失败: {e}")
+                            # 如果写入失败，关闭 writer 避免后续错误
+                            try:
+                                self.video_writer.release()
+                            except:
+                                pass
+                            self.video_writer = None
             
     def update_window_size(self, display_width, display_height):
         left_panel_width = 400
@@ -711,9 +732,13 @@ class MainWindow(QMainWindow):
         if self.is_recording:
             video_path = self.current_video_path
             self.is_recording = False
-            if self.video_writer:
-                self.video_writer.release()
-                self.video_writer = None
+            with self.video_writer_lock:
+                if self.video_writer:
+                    try:
+                        self.video_writer.release()
+                    except Exception as e:
+                        self.log_info(f"⚠️ 关闭VideoWriter失败: {e}")
+                    self.video_writer = None
             if video_path and video_path.exists():
                 video_path.unlink()
             self.video_frame_count = 0
