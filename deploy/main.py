@@ -376,7 +376,7 @@ class MainWindow(QMainWindow):
             self.u2_device.swipe(x1, y1, x2, y2, duration)
             self.log_info(f"  → swipe({x1}, {y1}, {x2}, {y2})")
         
-        def watch(second=2.0):
+        def watch(second=5.0):
             self.log_info(f"  → watch({second}s)")
             time.sleep(second)
         
