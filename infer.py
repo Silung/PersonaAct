@@ -3,6 +3,7 @@ import json
 import re
 import argparse
 import numpy as np
+from datetime import datetime
 from tqdm import tqdm
 from openai import OpenAI
 from scipy.stats import pearsonr, entropy
@@ -79,8 +80,120 @@ def load_persona(persona_file: str) -> dict:
     return {}
 
 
+def append_result_to_markdown(markdown_file: str, start_time: datetime, end_time: datetime,
+                              model: str, api_base: str, data_dir: str, test_file: str,
+                              persona: bool, think: bool, results: list):
+    """
+    将实验结果追加到 markdown 文件，每个数据集单独一行
+    
+    Args:
+        markdown_file: markdown 文件路径
+        start_time: 开始时间
+        end_time: 结束时间
+        model: 模型名称
+        api_base: API base URL
+        data_dir: 数据目录
+        test_file: 测试文件名
+        persona: 是否使用 Persona 模式
+        think: 是否使用 Think 模式
+        results: 结果列表，每个元素包含一个数据集的评估结果
+    """
+    # 确保 result 目录存在
+    markdown_dir = os.path.dirname(markdown_file)
+    if markdown_dir:
+        os.makedirs(markdown_dir, exist_ok=True)
+    else:
+        os.makedirs('result', exist_ok=True)
+    
+    # 计算运行时长（秒）
+    duration = (end_time - start_time).total_seconds()
+    
+    # 格式化时间
+    time_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
+    duration_str = f"{duration:.1f}"
+    
+    # 准备表格行数据
+    persona_str = "是" if persona else "否"
+    think_str = "是" if think else "否"
+    
+    # 转义 markdown 表格中的特殊字符（|）
+    def escape_md(text):
+        return str(text).replace('|', '\\|')
+    
+    # 检查文件是否存在，如果不存在则创建表头
+    file_exists = os.path.exists(markdown_file)
+    
+    with open(markdown_file, 'a', encoding='utf-8') as f:
+        if not file_exists:
+            # 创建表头
+            header = "| 运行时间 | 运行时长(秒) | 模型 | API Base | 数据目录 | 测试文件 | Persona | Think | 数据集 | 样本数 | Type ACC | Pearson | SMAPE | MAE | KL Div |\n"
+            separator = "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            f.write(header)
+            f.write(separator)
+        
+        # 为每个数据集追加一行
+        if results:
+            for result in results:
+                dataset_name = result.get('dataset', 'unknown')
+                samples = result.get('samples', 0)
+                type_acc = result.get('type_acc', 0.0)
+                pearson = result.get('pearson', 0.0)
+                smape = result.get('smape', 0.0)
+                mae = result.get('mae', 0.0)
+                kl_div = result.get('kl_div', 0.0)
+                
+                row = f"| {escape_md(time_str)} | {escape_md(duration_str)} | {escape_md(model)} | {escape_md(api_base)} | {escape_md(data_dir)} | {escape_md(test_file)} | {escape_md(persona_str)} | {escape_md(think_str)} | {escape_md(dataset_name)} | {samples} | {type_acc:.4f} | {pearson:.4f} | {smape:.4f} | {mae:.4f} | {kl_div:.4f} |\n"
+                f.write(row)
+
+
 # 从 prompts.py 导入统一的 prompt 函数
 from prompts import get_system_prompt, get_user_prompt
+
+
+def convert_image_tags_to_urls(content: str, images: list) -> list:
+    """
+    将包含<image>标签的文本转换为多模态content格式
+    
+    Args:
+        content: 包含<image>标签的文本
+        images: 图片路径列表
+    
+    Returns:
+        list: 多模态content（图片+文本），如果没有<image>标签则返回原字符串
+    """
+    if not images or '<image>' not in content:
+        # 如果没有图片或没有<image>标签，返回纯文本格式
+        return content
+    
+    # 分割文本，按<image>标签切分
+    parts = content.split('<image>')
+    
+    # 构建多模态content
+    result = []
+    image_idx = 0
+    
+    for i, part in enumerate(parts):
+        # 如果不是第一部分，说明前面有<image>标签，先添加图片
+        if i > 0 and image_idx < len(images):
+            img_path = images[image_idx]
+            # 转换为绝对路径
+            if not os.path.isabs(img_path):
+                img_path = os.path.abspath(img_path)
+            
+            result.append({
+                "type": "image_url",
+                "image_url": {"url": f"file://{img_path}"}
+            })
+            image_idx += 1
+        
+        # 添加文本部分（如果非空）
+        if part.strip():
+            result.append({
+                "type": "text",
+                "text": part
+            })
+    
+    return result if result else content
 
 
 def evaluate_dataset(dataset_name, test_file, data_dir="data", output_dir=None, is_persona=False, persona_file=None, 
@@ -118,15 +231,29 @@ def evaluate_dataset(dataset_name, test_file, data_dir="data", output_dir=None, 
     y_pred = []
     type_true = []
     type_pred = []
+    raw_outputs = []  # 保存原始输出
+    ground_truths = []  # 保存ground truth原始文本
+    input_messages = []  # 保存推理时的输入messages
+    input_images = []  # 保存输入图片路径
     
     print(f"共{len(all_data)}条样本，开始推理...")
     
     for item in tqdm(all_data, desc=f"推理 {dataset_name}"):
         messages = item['messages'].copy()  # 复制messages，避免修改原始数据
         
+        # 保存图片路径
+        images = item.get('images', [])
+        input_images.append(images)
+        
         # 如果最后一条是assistant的消息，移除它（这是ground truth）
         if messages[-1]['role'] == 'assistant':
             messages = messages[:-1]
+        
+        # 转换所有消息中的<image>标签为实际的图片URL
+        for msg in messages:
+            if msg['role'] == 'user' and isinstance(msg.get('content'), str):
+                # 将<image>标签转换为图片URL格式
+                msg['content'] = convert_image_tags_to_urls(msg['content'], images)
         
         # 如果提供了persona，使用统一的 system prompt 函数
         if persona:
@@ -145,6 +272,20 @@ def evaluate_dataset(dataset_name, test_file, data_dir="data", output_dir=None, 
         gt_type, gt_value = parse_solution_action(item['solution'])
         type_true.append(gt_type)
         y_true.append(gt_value if gt_value is not None else 0.0)
+        ground_truths.append(item['solution'])  # 保存ground truth原始文本
+        
+        # 保存输入messages（去掉图片路径，只保留文本内容用于调试）
+        messages_for_save = []
+        for msg in messages:
+            msg_copy = {"role": msg["role"]}
+            # 如果content是字符串，直接保存；如果是列表（多模态），只保存文本部分的前500字符
+            if isinstance(msg.get("content"), str):
+                # 保存前1000字符，避免太长
+                msg_copy["content"] = msg["content"][:1000] if len(msg["content"]) > 1000 else msg["content"]
+            else:
+                msg_copy["content"] = str(msg.get("content"))[:1000]
+            messages_for_save.append(msg_copy)
+        input_messages.append(messages_for_save)
         
         # 调用vllm
         try:
@@ -158,6 +299,8 @@ def evaluate_dataset(dataset_name, test_file, data_dir="data", output_dir=None, 
         except Exception as e:
             pred_out = ""
             print(f"推理异常：{e}")
+        
+        raw_outputs.append(pred_out)  # 保存原始输出
         pred_type, pred_value = parse_pred_action(pred_out)
         type_pred.append(pred_type)
         # 只eval观看时长（其他action统一算0）
@@ -199,7 +342,11 @@ def evaluate_dataset(dataset_name, test_file, data_dir="data", output_dir=None, 
             'gt_type': type_true[i],
             'pred_type': type_pred[i],
             'gt_watch': y_true[i],
-            'pred_watch': y_pred[i]
+            'pred_watch': y_pred[i],
+            'ground_truth': ground_truths[i],  # 原始ground truth
+            'model_output': raw_outputs[i],     # 模型原始输出
+            'input_messages': input_messages[i],  # 推理时的输入messages
+            'input_images': input_images[i]  # 输入图片路径列表
         })
     with open(output_detail_file, 'w', encoding='utf8') as f:
         json.dump(data_out, f, ensure_ascii=False, indent=2)
@@ -226,6 +373,8 @@ parser.add_argument('--test_file', type=str, default=None,
                     help='Test file name (auto-determined if not specified)')
 parser.add_argument('--persona', action='store_true',
                     help='Test persona version of the dataset (auto-use persona_video_action_test_item.jsonl)')
+parser.add_argument('--think', action='store_true',
+                    help='Test thinking version of the dataset (auto-use thinking_*_test_item.jsonl)')
 parser.add_argument('--api_base', type=str, default='http://127.0.0.1:8012/v1',
                     help='API base URL (default: http://127.0.0.1:8012/v1)')
 parser.add_argument('--api_key', type=str, default='1234567890',
@@ -236,14 +385,23 @@ args = parser.parse_args()
 
 # 自动确定测试文件名
 if args.test_file is None:
-    # 如果没有指定test_file，根据persona选项自动确定
+    # 如果没有指定test_file，根据persona和think选项自动确定
+    prefix = ''
+    if args.think:
+        prefix += 'thinking_'
     if args.persona:
-        args.test_file = 'persona_video_action_test_item.jsonl'
-    else:
-        args.test_file = 'video_action_test_item.jsonl'
-elif args.persona and not args.test_file.startswith('persona_'):
-    # 如果指定了test_file但使用了--persona，自动添加前缀
-    args.test_file = 'persona_' + args.test_file
+        prefix += 'persona_'
+    args.test_file = f'{prefix}video_action_test_item.jsonl'
+else:
+    # 如果指定了test_file，根据选项自动添加前缀
+    if args.think and not args.test_file.startswith('thinking_'):
+        args.test_file = 'thinking_' + args.test_file
+    if args.persona and not args.test_file.startswith('persona_'):
+        # 如果已经有thinking_前缀，在其后添加persona_
+        if args.test_file.startswith('thinking_'):
+            args.test_file = 'thinking_persona_' + args.test_file[9:]  # 去掉thinking_后添加thinking_persona_
+        else:
+            args.test_file = 'persona_' + args.test_file
 
 # 确定要测试的数据集
 if args.name:
@@ -269,9 +427,14 @@ if not datasets_to_test:
     print("未找到任何可用的测试数据集")
     exit(1)
 
+# 记录开始时间
+start_time = datetime.now()
+
 print(f"数据目录: {args.data_dir}")
 print(f"将测试数据集: {', '.join(datasets_to_test)}")
 print(f"测试文件: {args.test_file}")
+if args.think:
+    print("使用Thinking模式：将使用thinking_开头的数据文件")
 if args.persona:
     print("使用Persona模式：将加载persona.json文件")
 
@@ -332,6 +495,9 @@ if len(results) > 0:
               f"{weighted_pearson:<10.4f} {weighted_smape:<10.4f} {weighted_mae:<10.4f} "
               f"{weighted_kl_div:<10.4f}")
 
+# 记录结束时间
+end_time = datetime.now()
+
 # 保存汇总结果
 if results:
     # 确定汇总文件的保存目录
@@ -349,3 +515,19 @@ if results:
     with open(summary_file, 'w', encoding='utf8') as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"\n汇总结果已保存到: {summary_file}")
+    
+    # 追加结果到 markdown 文件
+    markdown_file = os.path.join('result', 'infer_results_history.md')
+    append_result_to_markdown(
+        markdown_file=markdown_file,
+        start_time=start_time,
+        end_time=end_time,
+        model=args.model,
+        api_base=args.api_base,
+        data_dir=args.data_dir,
+        test_file=args.test_file,
+        persona=args.persona,
+        think=args.think,
+        results=results
+    )
+    print(f"结果已追加到: {markdown_file}")

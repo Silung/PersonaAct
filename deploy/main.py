@@ -310,7 +310,7 @@ class MainWindow(QMainWindow):
         user_prompt = get_user_prompt(
             history_screenshots=self.ai_history_screenshots[-self.ai_max_history:] if self.ai_history_screenshots else None,
             history_actions=self.ai_history_actions[-self.ai_max_history:] if self.ai_history_actions else None,
-            current_screenshot=screenshot_path,
+            current_screenshots=[screenshot_path],
             audio_transcript=None
         )
         
@@ -398,7 +398,7 @@ class MainWindow(QMainWindow):
             self.u2_device.swipe(x1, y1, x2, y2, duration)
             self.log_info(f"  → swipe({x1}, {y1}, {x2}, {y2})")
         
-        def watch(second=2.0):
+        def watch(second=5.0):
             # 减去LLM延迟（从query到回复的时间）
             adjusted_second = max(0.0, second - self.llm_avg_delay)
             self.log_info(f"  → watch({second}s, 减去延迟{self.llm_avg_delay:.3f}s, 实际等待{adjusted_second:.3f}s)")

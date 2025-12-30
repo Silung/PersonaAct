@@ -3,24 +3,71 @@ import json
 import random
 import argparse
 import cv2
+import time
 from pathlib import Path
 from openai import OpenAI
 import concurrent.futures
 from tqdm import tqdm
 from typing import List, Dict, Tuple
-from prompts import get_system_prompt, get_user_prompt
+from prompts import (
+    get_system_prompt, 
+    get_user_prompt,
+    get_category_prompt,
+    get_video_stats_prompt,
+    get_action_reason_prompt,
+    get_action_reason_prompt_variants
+)
 import librosa
 import soundfile as sf
 import tempfile
 
 
-client = OpenAI(
-    base_url="http://127.0.0.1:8012/v1",
-    api_key="1234567890"
-)
+# OpenAI 配置（可通过环境变量或命令行参数设置）
+_openai_base_url = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:8012/v1")
+_openai_api_key = os.getenv("OPENAI_API_KEY", "1234567890")
+_openai_model = os.getenv("OPENAI_MODEL", "qwen")
+_client = None
+
+
+def get_openai_client():
+    """获取 OpenAI 客户端（单例模式）"""
+    global _client
+    if _client is None:
+        _client = OpenAI(
+            base_url=_openai_base_url,
+            api_key=_openai_api_key
+        )
+    return _client
+
+
+def set_openai_config(base_url: str = None, api_key: str = None, model: str = None):
+    """设置 OpenAI 配置"""
+    global _openai_base_url, _openai_api_key, _openai_model, _client
+    if base_url is not None:
+        _openai_base_url = base_url
+    if api_key is not None:
+        _openai_api_key = api_key
+    if model is not None:
+        _openai_model = model
+    # 重置客户端以便使用新配置
+    _client = None
+
+
+def get_openai_model():
+    """获取配置的 OpenAI 模型名称"""
+    return _openai_model
+
+
+def get_openai_config():
+    """获取 OpenAI 配置信息"""
+    return {
+        'base_url': _openai_base_url,
+        'model': _openai_model,
+        'api_key': _openai_api_key[:10] + '...' if len(_openai_api_key) > 10 else _openai_api_key
+    }
 
 def clean_json_response(response: str) -> str:
-    """清理模型返回的JSON响应，去除markdown标记"""
+    """清理模型返回的JSON响应，去除markdown标记和控制字符"""
     response = response.strip()
     if response.startswith("```json"):
         response = response[7:]
@@ -28,7 +75,18 @@ def clean_json_response(response: str) -> str:
         response = response[3:]
     if response.endswith("```"):
         response = response[:-3]
-    return response.strip()
+    response = response.strip()
+    
+    # 尝试解析并重新序列化，以清理控制字符
+    try:
+        import re
+        # 移除字符串值中的控制字符（保留JSON结构）
+        # 这是一个简单的预处理，帮助处理常见的控制字符问题
+        response = re.sub(r'[\x00-\x1f\x7f]', ' ', response)
+    except:
+        pass
+    
+    return response
 
 def get_category(image_paths: List[str], max_images: int = 10) -> dict:
     """
@@ -48,47 +106,8 @@ def get_category(image_paths: List[str], max_images: int = 10) -> dict:
     # 限制图片数量
     image_paths = image_paths[:max_images]
     
-    sys_prompt = (
-        "你需要对当前的短视频进行分类。请从以下【主类-子类】结构中选择最合适的分类（可以选择多个）：\n\n"
-        "{\n"
-        '  "娱乐": ["搞笑段子", "剧情短片", "才艺展示", "挑战实验", "综艺片段", "明星动态", "网红日常"],\n'
-        '  "知识教育": ["科普知识", "技能教学", "外语学习", "学习方法", "法律科普", "职业技能", "编程技术"],\n'
-        '  "生活记录": ["日常vlog", "家庭生活", "生活技巧", "情感故事", "社区互助", "公益记录", "怀旧故事"],\n'
-        '  "情感与心理": ["情感咨询", "恋爱关系", "婚姻家庭", "心理健康", "励志治愈", "情绪调节"],\n'
-        '  "美食": ["家常菜", "烘焙甜点", "特色小吃", "美食探店", "异国料理", "饮品调制", "美食测评"],\n'
-        '  "时尚美妆": ["穿搭分享", "美妆护肤", "发型造型", "配饰分享", "时尚资讯", "品牌测评", "美甲美睫"],\n'
-        '  "运动健身": ["健身训练", "球类运动", "户外探险", "瑜伽普拉提", "运动技巧", "极限运动", "康复训练"],\n'
-        '  "科技数码": ["手机测评", "电脑硬件", "智能家居", "软件技巧", "科技前沿", "数码配件", "AI应用"],\n'
-        '  "汽车": ["汽车评测", "驾驶技巧", "保养维护", "汽车文化", "新能源汽车", "二手车交易", "汽车改装"],\n'
-        '  "游戏": ["手游攻略", "端游实况", "电竞赛事", "游戏测评", "游戏教学", "游戏新闻", "虚拟世界/沙盒创作"],\n'
-        '  "音乐舞蹈": ["歌曲翻唱", "舞蹈表演", "乐器演奏", "声乐教学", "舞蹈教学", "音乐创作", "舞蹈编排"],\n'
-        '  "影视动漫": ["电影解说", "剧情剪辑", "影视评论", "经典影片", "动漫解说", "动画短片", "配音表演"],\n'
-        '  "旅行": ["国内旅行", "国外旅行", "旅行攻略", "露营体验", "景区探秘", "背包客路线", "小众景点"],\n'
-        '  "摄影与创作": ["摄影技巧", "器材测评", "后期制作", "人像摄影", "风光摄影", "手机摄影", "摄影作品展示"],\n'
-        '  "财经商业": ["商业分析", "创业经验", "理财知识", "投资策略", "副业思路", "营销策略", "经济观察"],\n'
-        '  "房产家居": ["住宅装修", "家居收纳", "家居好物", "房产知识", "租房买房", "园艺绿植", "智能家居"],\n'
-        '  "医疗健康": ["养生保健", "心理健康科普", "疾病预防", "营养饮食", "中医养生", "运动康复", "医药科普"],\n'
-        '  "三农乡村": ["农村生活", "农业种植", "乡村美食", "传统手艺", "乡村振兴", "农产品展示", "田园风光"],\n'
-        '  "宠物": ["狗狗日常", "猫咪日常", "宠物训练", "宠物医疗", "萌宠搞笑", "宠物用品", "动物救助"],\n'
-        '  "亲子育儿": ["育儿经验", "儿童教育", "萌娃日常", "亲子游戏", "孕期知识", "早教启蒙", "亲子旅行"],\n'
-        '  "二次元": ["动漫解说", "cosplay", "宅舞", "同人创作", "声优配音", "虚拟偶像", "动漫周边"],\n'
-        '  "文化历史": ["历史科普", "民俗文化", "文物考古", "非遗传承", "文学知识", "历史人物故事", "传统文化"],\n'
-        '  "军事法律": ["军事知识", "军事装备", "国防教育", "法律常识", "法律案例", "政策解读", "国际局势"],\n'
-        '  "社会资讯": ["社会热点", "民生事件", "公益新闻", "社会观察", "热点评论", "现场记录", "公共安全"],\n'
-        '  "广告推广": ["商业广告", "产品推广", "品牌宣传", "直播带货", "开箱测评", "促销活动", "软广植入"]\n'
-        "}\n\n"
-        "分类规则：\n"
-        "1. 可以输出1-3个最相关的分类，如果符合多个需要输出多个类别\n"
-        "2. 如果视频内容不符合以上任何分类，可以自由描述\n"
-        "3. 输出格式必须是纯 JSON，不包含任何额外文字或符号\n"
-        "输出格式：\n"
-        "{\n"
-        '  "categories": [\n'
-        '    {"main": "主类名称", "sub": "子类名称"},\n'
-        '    {"main": "主类名称2", "sub": "子类名称2"}  // 可选\n'
-        '  ]\n'
-        "}"
-    )
+    # 使用统一的 prompt 管理
+    sys_prompt = get_category_prompt()
     
     # 构建多张图片的content
     content = []
@@ -104,8 +123,9 @@ def get_category(image_paths: List[str], max_images: int = 10) -> dict:
         {"role": "user", "content": content}
     ]
 
+    client = get_openai_client()
     response = client.chat.completions.create(
-        model="qwen",
+        model=get_openai_model(),
         messages=messages,
         temperature=0.1
     )
@@ -121,18 +141,17 @@ def parse_video_stats(image_path: str) -> dict:
     调用 LLM 视觉模型识别图片中的点赞/评论/收藏/转发数量、作者和标题
     返回 dict: {"like": int, "comment": int, "favorite": int, "share": int, "author": str, "title": str}
     """
-    sys_prompt = """请你识别图片中的短视频点赞、评论、收藏、转发数量、作者名称和视频标题。请仅输出JSON格式，示例：
-{"like": 100, "comment": 22, "favorite": 8, "share": 3, "author": "用户名", "title": "视频标题"}。
-"like"为点赞数，"comment"为评论数，"favorite"为收藏数，"share"为转发数，"author"为作者名称，"title"为视频标题。
-发现为空或识别不出来时请输出0或空字符串。如果有单位需要换算，如"14.3万"应输出为143000。请严格保证输出格式为纯 JSON，不要多余内容。"""
+    # 使用统一的 prompt 管理
+    sys_prompt = get_video_stats_prompt()
     messages = [
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": f"file://{os.path.abspath(image_path)}"}}
         ]}
     ]
+    client = get_openai_client()
     response = client.chat.completions.create(
-        model='qwen',
+        model=get_openai_model(),
         messages=messages,
         temperature=0.0
     )
@@ -210,6 +229,29 @@ def get_video_screenshots(video_path: str, max_images: int = 10) -> List[str]:
     # 均匀抽帧
     indices = [int(i * len(screenshot_paths) / max_images) for i in range(max_images)]
     return [screenshot_paths[i] for i in indices]
+
+
+def get_available_frames(video_path: str, frame_indices: List[int] = [0, 1, 2]) -> List[str]:
+    """
+    获取指定视频的可用帧（用于数据增强）
+    
+    Args:
+        video_path: 视频文件路径
+        frame_indices: 要检查的帧索引列表，默认[0, 1, 2]
+        
+    Returns:
+        存在的帧文件路径列表
+    """
+    video_file = Path(video_path)
+    screenshots_dir = video_file.parent.parent / "screenshots" / video_file.stem
+    
+    available_frames = []
+    for idx in frame_indices:
+        frame_path = screenshots_dir / f"frame_{idx}.jpg"
+        if frame_path.exists():
+            available_frames.append(str(frame_path))
+    
+    return available_frames
 
 
 def extract_video_frames(video_path: str, output_dir: str = None, fps: int = 24) -> List[str]:
@@ -599,16 +641,18 @@ def analyze_stats_module(session_data: List[Tuple[str, Dict]], output_file: str)
     print(f"成功分析: {len(results)} 个视频")
 
 
-def analyze_action_reason(image_paths: List[str], action_info: dict) -> dict:
+def analyze_action_reason(image_paths: List[str], action_info: dict, num_versions: int = 1, temperature: float = 0.3) -> List[dict]:
     """
-    分析用户做出某个动作的原因
+    分析用户做出某个动作的原因（支持生成多个版本）
     
     Args:
         image_paths: 视频截图路径列表
         action_info: 动作信息，包含 viewing_duration 和 actions
+        num_versions: 生成多少个版本（用于数据增强）
+        temperature: 生成温度（越高越多样化）
         
     Returns:
-        dict: 包含 'description'（视频描述）, 'category'（分类）, 'reason'（行为解释）
+        List[dict]: 包含多个版本的列表，每个包含 'description', 'category', 'reason'
     """
     # 构建动作描述
     viewing_duration = action_info.get('viewing_duration', 0)
@@ -624,94 +668,137 @@ def analyze_action_reason(image_paths: List[str], action_info: dict) -> dict:
         elif action_type == 'share':
             action_desc += f"，分享给：{act.get('text', '')}"
     
-    sys_prompt = (
-        "你是一个短视频用户行为分析专家。请根据视频截图和用户的实际行为，完成以下三个任务：\n\n"
-        "1. **视频描述**：用一句话（不超过30字）描述视频的主要内容\n"
-        "2. **视频分类**：从以下【主类-子类】结构中选择最合适的1-2个分类：\n\n"
-        "{\n"
-        '  "娱乐": ["搞笑段子", "剧情短片", "才艺展示", "挑战实验", "综艺片段", "明星动态", "网红日常"],\n'
-        '  "知识教育": ["科普知识", "技能教学", "外语学习", "学习方法", "法律科普", "职业技能", "编程技术"],\n'
-        '  "生活记录": ["日常vlog", "家庭生活", "生活技巧", "情感故事", "社区互助", "公益记录", "怀旧故事"],\n'
-        '  "情感与心理": ["情感咨询", "恋爱关系", "婚姻家庭", "心理健康", "励志治愈", "情绪调节"],\n'
-        '  "美食": ["家常菜", "烘焙甜点", "特色小吃", "美食探店", "异国料理", "饮品调制", "美食测评"],\n'
-        '  "时尚美妆": ["穿搭分享", "美妆护肤", "发型造型", "配饰分享", "时尚资讯", "品牌测评", "美甲美睫"],\n'
-        '  "运动健身": ["健身训练", "球类运动", "户外探险", "瑜伽普拉提", "运动技巧", "极限运动", "康复训练"],\n'
-        '  "科技数码": ["手机测评", "电脑硬件", "智能家居", "软件技巧", "科技前沿", "数码配件", "AI应用"],\n'
-        '  "汽车": ["汽车评测", "驾驶技巧", "保养维护", "汽车文化", "新能源汽车", "二手车交易", "汽车改装"],\n'
-        '  "游戏": ["手游攻略", "端游实况", "电竞赛事", "游戏测评", "游戏教学", "游戏新闻", "虚拟世界/沙盒创作"],\n'
-        '  "音乐舞蹈": ["歌曲翻唱", "舞蹈表演", "乐器演奏", "声乐教学", "舞蹈教学", "音乐创作", "舞蹈编排"],\n'
-        '  "影视动漫": ["电影解说", "剧情剪辑", "影视评论", "经典影片", "动漫解说", "动画短片", "配音表演"],\n'
-        '  "旅行": ["国内旅行", "国外旅行", "旅行攻略", "露营体验", "景区探秘", "背包客路线", "小众景点"],\n'
-        '  "摄影与创作": ["摄影技巧", "器材测评", "后期制作", "人像摄影", "风光摄影", "手机摄影", "摄影作品展示"],\n'
-        '  "财经商业": ["商业分析", "创业经验", "理财知识", "投资策略", "副业思路", "营销策略", "经济观察"],\n'
-        '  "房产家居": ["住宅装修", "家居收纳", "家居好物", "房产知识", "租房买房", "园艺绿植", "智能家居"],\n'
-        '  "医疗健康": ["养生保健", "心理健康科普", "疾病预防", "营养饮食", "中医养生", "运动康复", "医药科普"],\n'
-        '  "三农乡村": ["农村生活", "农业种植", "乡村美食", "传统手艺", "乡村振兴", "农产品展示", "田园风光"],\n'
-        '  "宠物": ["狗狗日常", "猫咪日常", "宠物训练", "宠物医疗", "萌宠搞笑", "宠物用品", "动物救助"],\n'
-        '  "亲子育儿": ["育儿经验", "儿童教育", "萌娃日常", "亲子游戏", "孕期知识", "早教启蒙", "亲子旅行"],\n'
-        '  "二次元": ["动漫解说", "cosplay", "宅舞", "同人创作", "声优配音", "虚拟偶像", "动漫周边"],\n'
-        '  "文化历史": ["历史科普", "民俗文化", "文物考古", "非遗传承", "文学知识", "历史人物故事", "传统文化"],\n'
-        '  "军事法律": ["军事知识", "军事装备", "国防教育", "法律常识", "法律案例", "政策解读", "国际局势"],\n'
-        '  "社会资讯": ["社会热点", "民生事件", "公益新闻", "社会观察", "热点评论", "现场记录", "公共安全"],\n'
-        '  "广告推广": ["商业广告", "产品推广", "品牌宣传", "直播带货", "开箱测评", "促销活动", "软广植入"]\n'
-        "}\n\n"
-        "3. **行为解释**：用一句话（不超过30字）结合视频内容、分类和用户行为（观看时长、点赞/评论/分享）解释用户为什么这样做\n"
-        "   - 如果用户快速划走（<3秒），说明不感兴趣的原因\n"
-        "   - 如果用户观看较久但没有互动，说明内容吸引但不足以互动的原因\n"
-        "   - 如果用户点赞/评论/分享，说明内容打动用户的具体点\n\n"
-        "输出格式（纯JSON，不要有其他内容）：\n"
-        "{\n"
-        '  "description": "视频描述",\n'
-        '  "category": {"main": "主类", "sub": "子类"},\n'
-        '  "reason": "行为解释"\n'
-        "}"
-    )
+    # 使用统一的 prompt 管理
+    prompt_variants = get_action_reason_prompt_variants()
     
     # 构建多张图片的content
-    content = []
+    content_images = []
     for img_path in image_paths[:5]:  # 最多5张图
         if os.path.exists(img_path):
-            content.append({
+            content_images.append({
                 "type": "image_url",
                 "image_url": {"url": f"file://{os.path.abspath(img_path)}"}
             })
     
-    content.append({
-        "type": "text",
-        "text": f"用户行为：{action_desc}\n\n请完成上述三个任务："
-    })
+    # 生成多个版本
+    results = []
+    max_retries = 3  # 最大重试次数
+    retry_delay = 1  # 重试延迟（秒）
     
-    messages = [
-        {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": content}
-    ]
+    for version_idx in range(num_versions):
+        # 选择prompt变体（循环使用）
+        prompt_intro = prompt_variants[version_idx % len(prompt_variants)]
+        # 使用统一的 prompt 函数
+        sys_prompt = get_action_reason_prompt(prompt_intro, action_desc)
+        
+        # 构建content
+        content = content_images.copy()
+        content.append({
+            "type": "text",
+            "text": f"用户行为：{action_desc}\n\n请完成上述三个任务："
+        })
+        
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": content}
+        ]
+        
+        # 重试机制
+        result = None
+        last_error = None
+        
+        for retry_idx in range(max_retries):
+            try:
+                client = get_openai_client()
+                response = client.chat.completions.create(
+                    model=get_openai_model(),
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=300
+                )
+                
+                text = clean_json_response(response.choices[0].message.content)
+                
+                # 额外清理：移除可能导致JSON解析失败的问题
+                # 1. 替换常见的控制字符
+                text = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+                # 2. 移除多余的空格
+                import re
+                text = re.sub(r'\s+', ' ', text)
+                
+                parsed_result = json.loads(text)
+                
+                # 检查 result 是否为字典类型
+                if not isinstance(parsed_result, dict):
+                    # 如果不是字典，尝试将text作为reason（至少有一些内容）
+                    reason_text = text[:200] if len(text) > 200 else text
+                    if reason_text.strip():
+                        result = {
+                            'description': '',
+                            'category': {'main': '', 'sub': ''},
+                            'reason': reason_text.strip()
+                        }
+                        break  # 有reason内容，认为成功
+                    else:
+                        # 内容为空，继续重试
+                        last_error = "API返回的文本为空"
+                        if retry_idx < max_retries - 1:
+                            time.sleep(retry_delay * (retry_idx + 1))
+                            continue
+                else:
+                    # 验证结果是否有效（至少有一个字段不为空）
+                    desc = parsed_result.get('description', '').strip()
+                    reason = parsed_result.get('reason', '').strip()
+                    category = parsed_result.get('category', {})
+                    if isinstance(category, dict):
+                        main_cat = category.get('main', '').strip()
+                        sub_cat = category.get('sub', '').strip()
+                    else:
+                        main_cat = ''
+                        sub_cat = ''
+                    
+                    # 如果至少有一个字段有效，认为成功
+                    if desc or reason or main_cat or sub_cat:
+                        result = {
+                            'description': desc,
+                            'category': {'main': main_cat, 'sub': sub_cat},
+                            'reason': reason
+                        }
+                        break  # 成功，退出重试循环
+                    else:
+                        # 结果为空，继续重试
+                        last_error = "API返回的结果为空"
+                        if retry_idx < max_retries - 1:
+                            time.sleep(retry_delay * (retry_idx + 1))  # 指数退避
+                            continue
+                    
+            except json.JSONDecodeError as e:
+                last_error = f"JSON解析错误: {str(e)}"
+                if retry_idx < max_retries - 1:
+                    time.sleep(retry_delay * (retry_idx + 1))
+                    continue
+            except Exception as e:
+                last_error = f"API调用错误: {str(e)}"
+                if retry_idx < max_retries - 1:
+                    time.sleep(retry_delay * (retry_idx + 1))
+                    continue
+        
+        # 如果所有重试都失败，记录错误信息并返回空结果
+        if result is None:
+            print(f"警告: 生成版本 {version_idx + 1} 失败 (重试 {max_retries} 次): {last_error}")
+            results.append({
+                'description': '',
+                'category': {'main': '', 'sub': ''},
+                'reason': ''
+            })
+        else:
+            results.append(result)
     
-    response = client.chat.completions.create(
-        model="qwen",
-        messages=messages,
-        temperature=0.3,
-        max_tokens=300
-    )
-    
-    text = clean_json_response(response.choices[0].message.content)
-    try:
-        result = json.loads(text)
-        # 确保返回所需的字段
-        return {
-            'description': result.get('description', ''),
-            'category': result.get('category', {'main': '', 'sub': ''}),
-            'reason': result.get('reason', '')
-        }
-    except json.JSONDecodeError:
-        # 如果解析失败，返回空结果
-        return {
-            'description': '',
-            'category': {'main': '', 'sub': ''},
-            'reason': text  # 降级：直接使用原始文本作为reason
-        }
+    return results
 
 
-def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str):
+def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str, 
+                         aug_reason: bool = False, aug_reason_count: int = 4, aug_reason_temperature: float = 0.7):
     """
     分析模块：分析用户动作原因
     
@@ -722,6 +809,13 @@ def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str
     print("\n" + "="*60)
     print("开始分析用户动作原因")
     print("="*60 + "\n")
+    
+    if aug_reason:
+        print(f"✓ Reason多样化生成已启用")
+        print(f"  - 每个视频生成 {aug_reason_count} 个版本")
+        print(f"  - Temperature: {aug_reason_temperature}")
+    else:
+        print("Reason多样化生成: 未启用")
     
     results = {}
     
@@ -750,10 +844,16 @@ def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str
         video_path = action_info['video_path']
         screenshots = action_info['screenshots']
         
-        reason_result = analyze_action_reason(screenshots, {
-            'viewing_duration': action_info['viewing_duration'],
-            'actions': action_info['actions']
-        })
+        # 生成多个版本（如果启用）
+        reason_results = analyze_action_reason(
+            screenshots, 
+            {
+                'viewing_duration': action_info['viewing_duration'],
+                'actions': action_info['actions']
+            },
+            num_versions=aug_reason_count if aug_reason else 1,
+            temperature=aug_reason_temperature if aug_reason else 0.3
+        )
         
         # 构建动作字符串
         action_str = f"watch({action_info['viewing_duration']})"
@@ -766,15 +866,28 @@ def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str
             elif action_type == 'share':
                 action_str += f", share({act.get('text', '')})"
         
-        return video_path, {
-            'action': action_str,
-            'description': reason_result.get('description', ''),
-            'category': reason_result.get('category', {'main': '', 'sub': ''}),
-            'reason': reason_result.get('reason', ''),
-            'collector': action_info['collector'],
-            'session_id': action_info['session_id'],
-            'timestamp': action_info['timestamp']
-        }
+        # 保存所有版本
+        if aug_reason and len(reason_results) > 1:
+            # 多版本模式：保存所有版本
+            return video_path, {
+                'action': action_str,
+                'versions': reason_results,  # 多个版本
+                'collector': action_info['collector'],
+                'session_id': action_info['session_id'],
+                'timestamp': action_info['timestamp']
+            }
+        else:
+            # 单版本模式：兼容原格式
+            reason_result = reason_results[0] if reason_results else {}
+            return video_path, {
+                'action': action_str,
+                'description': reason_result.get('description', ''),
+                'category': reason_result.get('category', {'main': '', 'sub': ''}),
+                'reason': reason_result.get('reason', ''),
+                'collector': action_info['collector'],
+                'session_id': action_info['session_id'],
+                'timestamp': action_info['timestamp']
+            }
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(process_single, action) for action in all_actions]
@@ -782,7 +895,8 @@ def analyze_reason_module(session_data: List[Tuple[str, Dict]], output_file: str
         with tqdm(total=len(futures), desc="分析进度", ncols=80) as pbar:
             for fut in concurrent.futures.as_completed(futures):
                 video_path, result = fut.result()
-                if result and (result.get('reason') or result.get('description')):
+                # 检查结果是否有效（支持单版本和多版本格式）
+                if result and (result.get('versions') or result.get('reason') or result.get('description')):
                     results[video_path] = result
                 pbar.update(1)
     
@@ -815,7 +929,10 @@ def prepare_training_data(
     persona_file: str = None,
     random_seed: int = 42,
     think: bool = False,
-    audio_version: str = 'none'
+    audio_version: str = 'none',
+    aug: bool = False,
+    aug_factor: int = 6,
+    aug_duration_range: float = 0.05
 ):
     """
     将session数据切分为带历史的训练数据，并按session划分数据集避免信息泄露
@@ -840,6 +957,18 @@ def prepare_training_data(
     random.seed(random_seed)
     print(f"随机种子: {random_seed}")
     
+    # 输出数据增强信息
+    if aug:
+        print(f"✓ 数据增强已启用")
+        print(f"  - 增强倍数: {aug_factor}x")
+        print(f"  - 历史长度变化: 0-{max_history}")
+        print(f"  - 帧选择: frame_0/1/2")
+        print(f"  - 时长扰动: ±{aug_duration_range*100:.1f}%")
+        print(f"  - 增强范围: train + train_sft + train_all")
+        print(f"  - 保持原始: valid + test")
+    else:
+        print("数据增强: 未启用")
+    
     # 加载音频转录结果
     audio_transcripts = {}
     if audio_transcript_file and os.path.exists(audio_transcript_file):
@@ -863,79 +992,286 @@ def prepare_training_data(
     random.shuffle(session_data)
     total_sessions = len(session_data)
 
-    # 定义生成样本的函数
-    def generate_samples_from_session(collector, session):
-        """从单个session生成所有样本"""
-        samples = []
-        actions = session['actions']
+    # 定义生成原始样本的函数（不增强）
+    def generate_original_sample(collector, session, action, i, actions):
+        """为单个action生成原始样本（不增强）"""
+        xml_path = action.get('xml_path', '').replace('\\', '/')
+        video_path = action.get('video_path', '').replace('\\', '/')
+        audio_path = action.get('audio_path', '').replace('\\', '/')
         
-        for i, action in enumerate(actions):
-            xml_path = action.get('xml_path', '').replace('\\', '/')
-            video_path = action.get('video_path', '').replace('\\', '/')
-            audio_path = action.get('audio_path', '').replace('\\', '/')
+        # 构建历史记录（每个历史只用一张图）
+        start_idx = max(0, i - window_size + 1)
+        history_actions = actions[start_idx:i]
+        
+        # 提取历史截图（每个历史视频只用一张）
+        history_screenshots = []
+        str_actions = []
+        for hist_action in history_actions:
+            hist_video = hist_action.get('video_path', '').replace('\\', '/')
+            item = hist_action.get('actions', [])
+            hist_screenshots = get_video_screenshots(hist_video, max_images=1)
+            if hist_screenshots and actions:
+                history_screenshots.append(hist_screenshots[0])
+                str_action = '```python\n'
+                str_action += f"watch({hist_action['viewing_duration']})\n"
+                for act in item:
+                    action_type = act['type']
+                    if action_type == 'like':
+                        str_action += "like()\n"
+                    elif action_type == 'comment':
+                        str_action += f"comment({act['text']})\n"
+                    elif action_type == 'share':
+                        str_action += f"share({act['text']})\n"
+                str_action += '```'
+                str_actions.append(str_action)
+        
+        # 获取当前视频的第一帧（原始数据）
+        current_screenshots = get_video_screenshots(video_path, max_images=1)
+        if not current_screenshots:
+            return None
+        
+        # 随机选择历史记录数量（原始逻辑）
+        num_history = random.randint(0, min(max_history, len(history_screenshots))) if history_screenshots else 0
+        if num_history > 0:
+            selected_history = history_screenshots[-num_history:]
+            selected_str_actions = str_actions[-num_history:]
+        else:
+            selected_history = []
+            selected_str_actions = []
+        
+        # 构建训练样本：历史图片 + 当前视频的图片
+        all_images = selected_history + current_screenshots
+        
+        # 构建历史提示
+        if len(selected_history) > 0:
+            history_placeholder = "Your browsing history:\n"
+            for str_action in selected_str_actions:
+                history_placeholder += "<image>\n" + str_action + "\n"
+        else:
+            history_placeholder = ""
+        
+        # 获取三种版本的音频转录文本
+        audio_text_full = ""
+        audio_text_2s = ""
+        audio_text_none = ""
+        
+        if audio_path in audio_transcripts:
+            audio_text_full = audio_transcripts[audio_path].get('text', '')
+            audio_text_2s = audio_transcripts[audio_path].get('text_2s', '')
+        
+        # 原始时长（不扰动）
+        original_duration = action['viewing_duration']
+        
+        # 构建动作标签（用于监督学习）
+        user_actions = action.get('actions', [])
+        answer = '```python\n'
+        answer += f"watch({original_duration})\n"
+        for act in user_actions:
+            action_type = act['type']
+            if action_type == 'like':
+                answer += "like()\n"
+            elif action_type == 'comment':
+                answer += f"comment({act['text']})\n"
+            elif action_type == 'share':
+                answer += f"share({act['text']})\n"
+        answer += '```'
+        
+        # 获取动作原因（用于think模式）
+        reason_text = ""
+        if video_path in action_reasons:
+            reason_data = action_reasons[video_path]
             
-            # 为当前视频只取第一帧（避免多帧暗示观看时长）
-            current_screenshots = get_video_screenshots(video_path, max_images=1)
+            # 检查是否有多个版本
+            if 'versions' in reason_data:
+                # 多版本模式：随机选择一个版本
+                versions = reason_data['versions']
+                if versions:
+                    selected_version = random.choice(versions)
+                    description = selected_version.get('description', '')
+                    category = selected_version.get('category', {})
+                else:
+                    description = ''
+                    category = {}
+            else:
+                # 单版本模式：直接使用
+                description = reason_data.get('description', '')
+                category = reason_data.get('category', {})
             
-            # 构建历史记录（每个历史只用一张图）
-            start_idx = max(0, i - window_size + 1)
-            history_actions = actions[start_idx:i]
+            # 构建完整的分析文本（描述+分类，不包含解释）
+            parts = []
             
-            # 提取历史截图（每个历史视频只用一张）
-            history_screenshots = []
-            str_actions = []
-            for hist_action in history_actions:
-                hist_video = hist_action.get('video_path', '').replace('\\', '/')
-                item = hist_action.get('actions', [])
-                hist_screenshots = get_video_screenshots(hist_video, max_images=1)
-                if hist_screenshots and actions:
-                    history_screenshots.append(hist_screenshots[0])
-                    str_action = '```python\n'
-                    str_action += f"watch({hist_action['viewing_duration']})\n"
-                    for act in item:
-                        action_type = act['type']
-                        if action_type == 'like':
-                            str_action += "like()\n"
-                        elif action_type == 'comment':
-                            str_action += f"comment({act['text']})\n"
-                        elif action_type == 'share':
-                            str_action += f"share({act['text']})\n"
-                    str_action += '```'
-                    str_actions.append(str_action)
+            # 1. 视频内容描述
+            if description:
+                parts.append(f"视频内容：{description}")
             
-            # 随机选择历史记录数量
-            if history_screenshots:
-                num_history = random.randint(1, min(max_history, len(history_screenshots)))
-                selected_history = history_screenshots[-num_history:]
-                str_actions = str_actions[-num_history:]
+            # 2. 视频分类
+            category_str = f"{category.get('main', '')}-{category.get('sub', '')}" if category.get('main') else ""
+            if category_str:
+                parts.append(f"分类：{category_str}")
+            
+            # 组合成完整文本
+            if parts:
+                reason_text = "\n".join(parts)
+        
+        # 构建带原因的回答（用于think模式）
+        answer_with_reason = ""
+        if reason_text:
+            answer_with_reason = f"{reason_text}\n\n{answer}"
+        else:
+            answer_with_reason = answer
+        
+        # 通用的元数据
+        metadata = {
+            "collector": collector,
+            "session_id": session['session_id'],
+            "timestamp": action.get('timestamp', ''),
+            "viewing_duration": original_duration,
+            "xml_path": xml_path,
+            "video_path": action.get('video_path', '').replace('\\', '/'),
+            "audio_path": action.get('audio_path', '').replace('\\', '/')
+        }
+        
+        # 辅助函数：创建样本
+        def create_sample(audio_text_version, use_thinking=False):
+            """创建单个样本"""
+            # 生成基础 user prompt（普通样本不使用persona）
+            base_user_prompt = get_user_prompt(
+                history_screenshots=selected_history,
+                history_actions=selected_str_actions if selected_history else None,
+                current_screenshots=current_screenshots,
+                audio_transcript=audio_text_version,
+                persona=None
+            )
+            
+            # 所有模式都使用"视频内容+分类+代码块"格式
+            user_prompt = base_user_prompt
+            # 使用 answer_with_reason（包含视频内容和分类）
+            assistant_content = answer_with_reason if answer_with_reason else answer
+            solution_content = answer_with_reason if answer_with_reason else answer
+            
+            return {
+                "images": all_images,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": get_system_prompt(use_persona=False)
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt
+                    },
+                    {
+                        "role": "assistant",
+                        "content": assistant_content
+                    }
+                ],
+                "solution": solution_content,
+                "metadata": metadata.copy()
+            }
+        
+        # 辅助函数：创建persona样本
+        def create_persona_sample(audio_text_version, use_thinking=False):
+            """创建带persona的样本"""
+            # persona信息现在放在user message中
+            base_user_prompt = get_user_prompt(
+                history_screenshots=selected_history,
+                history_actions=selected_str_actions if selected_history else None,
+                current_screenshots=current_screenshots,
+                audio_transcript=audio_text_version,
+                persona=persona if persona else None
+            )
+            
+            # 所有模式都使用"视频内容+分类+代码块"格式
+            user_prompt = base_user_prompt
+            assistant_content = answer_with_reason if answer_with_reason else answer
+            solution_content = answer_with_reason if answer_with_reason else answer
+            
+            return {
+                "images": all_images,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": get_system_prompt(use_persona=False)
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt
+                    },
+                    {
+                        "role": "assistant",
+                        "content": assistant_content
+                    }
+                ],
+                "solution": solution_content,
+                "metadata": metadata.copy()
+            }
+        
+        # 生成三种版本的样本：(完整转录, 2s转录, 无转录)
+        sample_full = create_sample(audio_text_full, use_thinking=think)
+        sample_2s = create_sample(audio_text_2s, use_thinking=think)
+        sample_none = create_sample(audio_text_none, use_thinking=think)
+        
+        # 生成三种版本的persona样本
+        persona_sample_full = create_persona_sample(audio_text_full, use_thinking=think)
+        persona_sample_2s = create_persona_sample(audio_text_2s, use_thinking=think)
+        persona_sample_none = create_persona_sample(audio_text_none, use_thinking=think)
+        
+        # 返回三种版本的样本：(完整转录, 2s转录, 无转录)，每种包含(普通, persona)
+        return (
+            (sample_full, sample_2s, sample_none),
+            (persona_sample_full, persona_sample_2s, persona_sample_none)
+        )
+    
+    # 定义数据增强函数：对单个原始样本进行增强
+    def augment_sample(original_sample_tuple, video_path, history_screenshots, str_actions, action, audio_path):
+        """对单个原始样本进行增强，生成aug_factor个增强版本"""
+        augmented_samples = []
+        original_normal, original_persona = original_sample_tuple
+        
+        # 获取当前视频的可用帧
+        available_frames = get_available_frames(video_path, frame_indices=[0, 1, 2])
+        if not available_frames:
+            return [original_sample_tuple]  # 如果没有可用帧，返回原始样本
+        
+        # 生成增强配置
+        max_hist_len = min(max_history, len(history_screenshots)) if history_screenshots else 0
+        
+        for _ in range(aug_factor):
+            hist_len = random.randint(0, max_hist_len)
+            frame_idx = random.randint(0, len(available_frames) - 1)
+            duration_ratio = random.uniform(1 - aug_duration_range, 1 + aug_duration_range)
+            
+            # 选择历史
+            if hist_len > 0 and history_screenshots:
+                selected_history = history_screenshots[-hist_len:]
+                selected_str_actions = str_actions[-hist_len:]
             else:
                 selected_history = []
-                str_actions = []
+                selected_str_actions = []
             
-            # 构建训练样本：历史图片 + 当前视频的多张图片
+            # 选择当前帧
+            current_screenshots = [available_frames[frame_idx]]
+            
+            # 构建训练样本：历史图片 + 当前视频的图片
             all_images = selected_history + current_screenshots
             
-            # 构建历史提示
-            if len(selected_history) > 0:
-                history_placeholder = "Your browsing history:\n"
-                for str_action in str_actions:
-                    history_placeholder += "<image>\n" + str_action + "\n"
-            else:
-                history_placeholder = ""
-            
             # 获取三种版本的音频转录文本
-            audio_text_full = ""  # 完整转录
-            audio_text_2s = ""    # 2秒转录
-            audio_text_none = ""  # 无转录
+            audio_text_full = ""
+            audio_text_2s = ""
+            audio_text_none = ""
             
             if audio_path in audio_transcripts:
                 audio_text_full = audio_transcripts[audio_path].get('text', '')
                 audio_text_2s = audio_transcripts[audio_path].get('text_2s', '')
             
+            # 应用时长扰动
+            perturbed_duration = action['viewing_duration'] * duration_ratio
+            perturbed_duration = round(perturbed_duration, 2)
+            
             # 构建动作标签（用于监督学习）
             user_actions = action.get('actions', [])
             answer = '```python\n'
-            answer += f"watch({action['viewing_duration']})\n"
+            answer += f"watch({perturbed_duration})\n"
             for act in user_actions:
                 action_type = act['type']
                 if action_type == 'like':
@@ -950,75 +1286,65 @@ def prepare_training_data(
             reason_text = ""
             if video_path in action_reasons:
                 reason_data = action_reasons[video_path]
-                description = reason_data.get('description', '')
-                category = reason_data.get('category', {})
-                reason = reason_data.get('reason', '')
                 
-                # 构建完整的分析文本（描述+分类+解释）
+                if 'versions' in reason_data:
+                    versions = reason_data['versions']
+                    if versions:
+                        selected_version = random.choice(versions)
+                        description = selected_version.get('description', '')
+                        category = selected_version.get('category', {})
+                    else:
+                        description = ''
+                        category = {}
+                else:
+                    description = reason_data.get('description', '')
+                    category = reason_data.get('category', {})
+                
                 parts = []
-                
-                # 1. 视频内容描述
                 if description:
                     parts.append(f"视频内容：{description}")
-                
-                # 2. 视频分类
                 category_str = f"{category.get('main', '')}-{category.get('sub', '')}" if category.get('main') else ""
                 if category_str:
                     parts.append(f"分类：{category_str}")
-                
-                # 3. 行为解释
-                if reason:
-                    parts.append(f"行为分析：{reason}")
-                
-                # 组合成完整文本
                 if parts:
                     reason_text = "\n".join(parts)
             
-            # 构建带原因的回答（用于think模式）
-            answer_with_reason = ""
-            if reason_text:
-                answer_with_reason = f"{reason_text}\n\n{answer}"
-            else:
-                answer_with_reason = answer
+            answer_with_reason = f"{reason_text}\n\n{answer}" if reason_text else answer
             
             # 通用的元数据
             metadata = {
-                "collector": collector,
-                "session_id": session['session_id'],
-                "timestamp": action.get('timestamp', ''),
-                "viewing_duration": action.get('viewing_duration', 0),
-                "xml_path": xml_path,
-                "video_path": action.get('video_path', '').replace('\\', '/'),
-                "audio_path": action.get('audio_path', '').replace('\\', '/')
+                "collector": original_normal[0]['metadata']['collector'],
+                "session_id": original_normal[0]['metadata']['session_id'],
+                "timestamp": original_normal[0]['metadata']['timestamp'],
+                "viewing_duration": perturbed_duration,
+                "xml_path": original_normal[0]['metadata']['xml_path'],
+                "video_path": original_normal[0]['metadata']['video_path'],
+                "audio_path": original_normal[0]['metadata']['audio_path']
             }
             
-            # 辅助函数：创建样本
-            def create_sample(audio_text_version, use_thinking=False):
-                """创建单个样本"""
-                # 生成基础 user prompt（普通样本不使用persona）
+            # 辅助函数：创建增强样本
+            def create_aug_sample(audio_text_version, original_sample, use_thinking=False):
+                """基于原始样本创建增强样本"""
+                # 构建历史提示
+                if len(selected_history) > 0:
+                    history_placeholder = "Your browsing history:\n"
+                    for str_action in selected_str_actions:
+                        history_placeholder += "<image>\n" + str_action + "\n"
+                else:
+                    history_placeholder = ""
+                
                 base_user_prompt = get_user_prompt(
                     history_screenshots=selected_history,
-                    history_actions=str_actions if selected_history else None,
+                    history_actions=selected_str_actions if selected_history else None,
                     current_screenshots=current_screenshots,
                     audio_transcript=audio_text_version,
                     persona=None
                 )
                 
-                # 如果使用thinking模式，修改prompt
-                if use_thinking:
-                    user_prompt = base_user_prompt.replace(
-                        "Respond strictly with a Python code block",
-                        "Start by giving a short reason for the action you are taking, and then output a Python code block"
-                    ).replace(
-                        "starting with ```python",
-                        "beginning with ```python"
-                    )
-                    assistant_content = answer_with_reason
-                    solution_content = answer_with_reason
-                else:
-                    user_prompt = base_user_prompt
-                    assistant_content = answer
-                    solution_content = answer
+                # 所有模式都使用"视频内容+分类+代码块"格式
+                user_prompt = base_user_prompt
+                assistant_content = answer_with_reason if answer_with_reason else answer
+                solution_content = answer_with_reason if answer_with_reason else answer
                 
                 return {
                     "images": all_images,
@@ -1040,32 +1366,20 @@ def prepare_training_data(
                     "metadata": metadata.copy()
                 }
             
-            # 辅助函数：创建persona样本
-            def create_persona_sample(audio_text_version, use_thinking=False):
-                """创建带persona的样本"""
-                # persona信息现在放在user message中
+            def create_aug_persona_sample(audio_text_version, original_sample, use_thinking=False):
+                """基于原始样本创建增强的persona样本"""
                 base_user_prompt = get_user_prompt(
                     history_screenshots=selected_history,
-                    history_actions=str_actions if selected_history else None,
+                    history_actions=selected_str_actions if selected_history else None,
                     current_screenshots=current_screenshots,
                     audio_transcript=audio_text_version,
                     persona=persona if persona else None
                 )
                 
-                if use_thinking:
-                    user_prompt = base_user_prompt.replace(
-                        "Respond strictly with a Python code block",
-                        "Start by giving a short reason for the action you are taking, and then output a Python code block"
-                    ).replace(
-                        "starting with ```python",
-                        "beginning with ```python"
-                    )
-                    assistant_content = answer_with_reason
-                    solution_content = answer_with_reason
-                else:
-                    user_prompt = base_user_prompt
-                    assistant_content = answer
-                    solution_content = answer
+                # 所有模式都使用"视频内容+分类+代码块"格式
+                user_prompt = base_user_prompt
+                assistant_content = answer_with_reason if answer_with_reason else answer
+                solution_content = answer_with_reason if answer_with_reason else answer
                 
                 return {
                     "images": all_images,
@@ -1087,23 +1401,21 @@ def prepare_training_data(
                     "metadata": metadata.copy()
                 }
             
-            # 生成三种版本的样本：(完整转录, 2s转录, 无转录)
-            sample_full = create_sample(audio_text_full, use_thinking=think)
-            sample_2s = create_sample(audio_text_2s, use_thinking=think)
-            sample_none = create_sample(audio_text_none, use_thinking=think)
+            # 生成三种版本的增强样本
+            aug_sample_full = create_aug_sample(audio_text_full, original_normal[0], use_thinking=think)
+            aug_sample_2s = create_aug_sample(audio_text_2s, original_normal[1], use_thinking=think)
+            aug_sample_none = create_aug_sample(audio_text_none, original_normal[2], use_thinking=think)
             
-            # 生成三种版本的persona样本
-            persona_sample_full = create_persona_sample(audio_text_full, use_thinking=think)
-            persona_sample_2s = create_persona_sample(audio_text_2s, use_thinking=think)
-            persona_sample_none = create_persona_sample(audio_text_none, use_thinking=think)
+            aug_persona_sample_full = create_aug_persona_sample(audio_text_full, original_persona[0], use_thinking=think)
+            aug_persona_sample_2s = create_aug_persona_sample(audio_text_2s, original_persona[1], use_thinking=think)
+            aug_persona_sample_none = create_aug_persona_sample(audio_text_none, original_persona[2], use_thinking=think)
             
-            # 返回三种版本的样本：(完整转录, 2s转录, 无转录)，每种包含(普通, persona)
-            samples.append((
-                (sample_full, sample_2s, sample_none),
-                (persona_sample_full, persona_sample_2s, persona_sample_none)
+            augmented_samples.append((
+                (aug_sample_full, aug_sample_2s, aug_sample_none),
+                (aug_persona_sample_full, aug_persona_sample_2s, aug_persona_sample_none)
             ))
         
-        return samples
+        return augmented_samples
     
     # 生成各个数据集 - 三种版本：完整转录、2秒转录、无转录
     # 每个数据集都有三种版本
@@ -1153,73 +1465,151 @@ def prepare_training_data(
     }
     
     for collector, session in session_data:
-        samples = generate_samples_from_session(collector, session)
+        actions = session['actions']
         
-        num_sft_data = int(len(samples)*0.3)
-        num_vaild = len(samples) // 10
-        num_test = len(samples) // 10
+        # 先划分action索引
+        num_actions = len(actions)
+        num_sft_data = int(num_actions * 0.3)
+        num_vaild = num_actions // 10
+        num_test = num_actions // 10
         
-        # 如果样本数 <= 4，全部放入train
         if num_vaild == 0:
-            # 完整转录版本
-            datasets_full['train'].extend([s[0][0] for s in samples])
-            datasets_full['train_all'].extend([s[0][0] for s in samples])
-            persona_datasets_full['train'].extend([s[1][0] for s in samples])
-            persona_datasets_full['train_all'].extend([s[1][0] for s in samples])
-            # 2秒转录版本
-            datasets_2s['train'].extend([s[0][1] for s in samples])
-            datasets_2s['train_all'].extend([s[0][1] for s in samples])
-            persona_datasets_2s['train'].extend([s[1][1] for s in samples])
-            persona_datasets_2s['train_all'].extend([s[1][1] for s in samples])
-            # 无转录版本
-            datasets_none['train'].extend([s[0][2] for s in samples])
-            datasets_none['train_all'].extend([s[0][2] for s in samples])
-            persona_datasets_none['train'].extend([s[1][2] for s in samples])
-            persona_datasets_none['train_all'].extend([s[1][2] for s in samples])
+            # 样本数太少，全部作为train
+            train_indices = list(range(num_actions))
+            valid_indices = []
+            test_indices = []
+            sft_indices = []
         else:
-            last = samples[-(num_vaild + num_test):]
-            first = samples[:num_sft_data]
-            random.shuffle(last)
-            random.shuffle(first)
+            last_indices = list(range(num_actions - num_vaild - num_test, num_actions))
+            first_indices = list(range(num_sft_data))
+            train_indices_original = list(range(num_sft_data, num_actions - num_vaild - num_test))
+            random.shuffle(last_indices)
+            random.shuffle(first_indices)
             
-            # 完整转录版本
-            datasets_full['valid'].extend([s[0][0] for s in last[:num_vaild]])
-            datasets_full['test'].extend([s[0][0] for s in last[num_vaild:]])
-            persona_datasets_full['valid'].extend([s[1][0] for s in last[:num_vaild]])
-            persona_datasets_full['test'].extend([s[1][0] for s in last[num_vaild:]])
-            if first:
-                datasets_full['sft'].extend([s[0][0] for s in first])
-                persona_datasets_full['sft'].extend([s[1][0] for s in first])
-            datasets_full['train'].extend([s[0][0] for s in samples[num_sft_data:-(num_vaild + num_test)]])
-            datasets_full['train_all'].extend([s[0][0] for s in samples[:-(num_vaild + num_test)]])
-            persona_datasets_full['train'].extend([s[1][0] for s in samples[num_sft_data:-(num_vaild + num_test)]])
-            persona_datasets_full['train_all'].extend([s[1][0] for s in samples[:-(num_vaild + num_test)]])
-            
-            # 2秒转录版本
-            datasets_2s['valid'].extend([s[0][1] for s in last[:num_vaild]])
-            datasets_2s['test'].extend([s[0][1] for s in last[num_vaild:]])
-            persona_datasets_2s['valid'].extend([s[1][1] for s in last[:num_vaild]])
-            persona_datasets_2s['test'].extend([s[1][1] for s in last[num_vaild:]])
-            if first:
-                datasets_2s['sft'].extend([s[0][1] for s in first])
-                persona_datasets_2s['sft'].extend([s[1][1] for s in first])
-            datasets_2s['train'].extend([s[0][1] for s in samples[num_sft_data:-(num_vaild + num_test)]])
-            datasets_2s['train_all'].extend([s[0][1] for s in samples[:-(num_vaild + num_test)]])
-            persona_datasets_2s['train'].extend([s[1][1] for s in samples[num_sft_data:-(num_vaild + num_test)]])
-            persona_datasets_2s['train_all'].extend([s[1][1] for s in samples[:-(num_vaild + num_test)]])
-            
-            # 无转录版本
-            datasets_none['valid'].extend([s[0][2] for s in last[:num_vaild]])
-            datasets_none['test'].extend([s[0][2] for s in last[num_vaild:]])
-            persona_datasets_none['valid'].extend([s[1][2] for s in last[:num_vaild]])
-            persona_datasets_none['test'].extend([s[1][2] for s in last[num_vaild:]])
-            if first:
-                datasets_none['sft'].extend([s[0][2] for s in first])
-                persona_datasets_none['sft'].extend([s[1][2] for s in first])
-            datasets_none['train'].extend([s[0][2] for s in samples[num_sft_data:-(num_vaild + num_test)]])
-            datasets_none['train_all'].extend([s[0][2] for s in samples[:-(num_vaild + num_test)]])
-            persona_datasets_none['train'].extend([s[1][2] for s in samples[num_sft_data:-(num_vaild + num_test)]])
-            persona_datasets_none['train_all'].extend([s[1][2] for s in samples[:-(num_vaild + num_test)]])
+            valid_indices = last_indices[:num_vaild]
+            test_indices = last_indices[num_vaild:]
+            sft_indices = first_indices
+            train_indices = train_indices_original
+        
+        # 生成valid和test的原始样本（不增强）
+        valid_samples = []
+        test_samples = []
+        for idx in valid_indices:
+            sample = generate_original_sample(collector, session, actions[idx], idx, actions)
+            if sample:
+                valid_samples.append(sample)
+        for idx in test_indices:
+            sample = generate_original_sample(collector, session, actions[idx], idx, actions)
+            if sample:
+                test_samples.append(sample)
+        
+        # 辅助函数：生成增强或原始样本
+        def generate_train_sample(idx, action):
+            """根据是否启用增强，生成训练样本"""
+            if aug:
+                # 生成增强样本
+                video_path = action.get('video_path', '').replace('\\', '/')
+                audio_path = action.get('audio_path', '').replace('\\', '/')
+                
+                # 构建历史信息
+                start_idx = max(0, idx - window_size + 1)
+                history_screenshots = []
+                str_actions_list = []
+                for hist_idx in range(start_idx, idx):
+                    hist_action = actions[hist_idx]
+                    hist_video = hist_action.get('video_path', '').replace('\\', '/')
+                    hist_screenshots = get_video_screenshots(hist_video, max_images=1)
+                    if hist_screenshots:
+                        history_screenshots.append(hist_screenshots[0])
+                        item = hist_action.get('actions', [])
+                        str_action = '```python\n'
+                        str_action += f"watch({hist_action['viewing_duration']})\n"
+                        for act in item:
+                            action_type = act['type']
+                            if action_type == 'like':
+                                str_action += "like()\n"
+                            elif action_type == 'comment':
+                                str_action += f"comment({act['text']})\n"
+                            elif action_type == 'share':
+                                str_action += f"share({act['text']})\n"
+                        str_action += '```'
+                        str_actions_list.append(str_action)
+                
+                # 对每个原始样本生成aug_factor个增强版本
+                original_sample = generate_original_sample(collector, session, action, idx, actions)
+                if original_sample:
+                    return augment_sample(original_sample, video_path, history_screenshots, str_actions_list, action, audio_path)
+                return []
+            else:
+                # 不增强，只生成原始样本
+                sample = generate_original_sample(collector, session, action, idx, actions)
+                return [sample] if sample else []
+        
+        # 生成sft和train的样本（如果启用增强，生成aug_factor倍的增强样本）
+        sft_samples = []
+        for idx in sft_indices:
+            sft_samples.extend(generate_train_sample(idx, actions[idx]))
+        
+        train_samples = []
+        for idx in train_indices:
+            train_samples.extend(generate_train_sample(idx, actions[idx]))
+        
+        # 划分到各个数据集
+        # 重要说明：
+        # 1. train_all = train + train_sft（保持这两部分的比例不变）
+        # 2. valid 和 test 与其他数据集不重叠（这是常识）
+        # 3. 数据增强只对 train 和 sft 起作用，不对 valid 和 test 起作用
+        
+        # 构建 train_all（包含所有训练数据：train + sft）
+        train_all_samples = train_samples + (sft_samples if sft_samples else [])
+        
+        # 完整转录版本
+        # valid 和 test：不增强，与其他数据集不重叠
+        datasets_full['valid'].extend([s[0][0] for s in valid_samples])
+        datasets_full['test'].extend([s[0][0] for s in test_samples])
+        # train_all = train + sft（保持比例）
+        datasets_full['train_all'].extend([s[0][0] for s in train_all_samples])
+        datasets_full['train'].extend([s[0][0] for s in train_samples])
+        if sft_samples:
+            datasets_full['sft'].extend([s[0][0] for s in sft_samples])
+        
+        # persona 完整转录版本
+        persona_datasets_full['valid'].extend([s[1][0] for s in valid_samples])
+        persona_datasets_full['test'].extend([s[1][0] for s in test_samples])
+        persona_datasets_full['train_all'].extend([s[1][0] for s in train_all_samples])
+        persona_datasets_full['train'].extend([s[1][0] for s in train_samples])
+        if sft_samples:
+            persona_datasets_full['sft'].extend([s[1][0] for s in sft_samples])
+        
+        # 2秒转录版本
+        datasets_2s['valid'].extend([s[0][1] for s in valid_samples])
+        datasets_2s['test'].extend([s[0][1] for s in test_samples])
+        datasets_2s['train_all'].extend([s[0][1] for s in train_all_samples])
+        datasets_2s['train'].extend([s[0][1] for s in train_samples])
+        if sft_samples:
+            datasets_2s['sft'].extend([s[0][1] for s in sft_samples])
+        
+        persona_datasets_2s['valid'].extend([s[1][1] for s in valid_samples])
+        persona_datasets_2s['test'].extend([s[1][1] for s in test_samples])
+        persona_datasets_2s['train_all'].extend([s[1][1] for s in train_all_samples])
+        persona_datasets_2s['train'].extend([s[1][1] for s in train_samples])
+        if sft_samples:
+            persona_datasets_2s['sft'].extend([s[1][1] for s in sft_samples])
+        
+        # 无转录版本
+        datasets_none['valid'].extend([s[0][2] for s in valid_samples])
+        datasets_none['test'].extend([s[0][2] for s in test_samples])
+        datasets_none['train_all'].extend([s[0][2] for s in train_all_samples])
+        datasets_none['train'].extend([s[0][2] for s in train_samples])
+        if sft_samples:
+            datasets_none['sft'].extend([s[0][2] for s in sft_samples])
+        
+        persona_datasets_none['valid'].extend([s[1][2] for s in valid_samples])
+        persona_datasets_none['test'].extend([s[1][2] for s in test_samples])
+        persona_datasets_none['train_all'].extend([s[1][2] for s in train_all_samples])
+        persona_datasets_none['train'].extend([s[1][2] for s in train_samples])
+        if sft_samples:
+            persona_datasets_none['sft'].extend([s[1][2] for s in sft_samples])
     
     # 保存数据集
     output_path = Path(output_file)
@@ -1370,12 +1760,47 @@ def main():
     parser.add_argument('--audio', type=str, default='none',
                        choices=['none', 'full', '2s'],
                        help='音频转录版本: none(无转录,默认), full(完整转录), 2s(2秒转录)')
+    
+    parser.add_argument('--aug', action='store_true', default=False,
+                       help='启用数据增强（历史长度+帧选择+时长扰动）')
+    parser.add_argument('--aug-factor', type=int, default=6,
+                       choices=[4, 6, 8, 12],
+                       help='增强倍数: 4(保守), 6(推荐), 8(激进), 12(全组合)')
+    parser.add_argument('--aug-duration-range', type=float, default=0.05,
+                       help='观看时长扰动范围 (默认±5%%，例如0.05表示±5%%)')
+    
+    parser.add_argument('--aug-reason', action='store_true', default=False,
+                       help='在reason阶段启用多样化生成（生成多个描述版本）')
+    parser.add_argument('--aug-reason-count', type=int, default=4,
+                       help='reason阶段为每个视频生成多少个描述版本（默认4）')
+    parser.add_argument('--aug-reason-temperature', type=float, default=1,
+                       help='reason阶段的temperature（默认0.7，更高=更多样化）')
+    
+    parser.add_argument('--openai-base-url', type=str, default=None,
+                       help='OpenAI API base URL（默认从环境变量 OPENAI_BASE_URL 读取，或使用默认值）')
+    parser.add_argument('--openai-api-key', type=str, default=None,
+                       help='OpenAI API key（默认从环境变量 OPENAI_API_KEY 读取，或使用默认值）')
+    parser.add_argument('--openai-model', type=str, default=None,
+                       help='OpenAI 模型名称（默认从环境变量 OPENAI_MODEL 读取，或使用默认值 "qwen"）')
 
     args = parser.parse_args()
+    
+    # 设置 OpenAI 配置
+    set_openai_config(
+        base_url=args.openai_base_url,
+        api_key=args.openai_api_key,
+        model=args.openai_model
+    )
     
     print("\n" + "="*60)
     print("PersonaAct 数据准备工具")
     print("="*60 + "\n")
+    config = get_openai_config()
+    print(f"OpenAI 配置:")
+    print(f"  Base URL: {config['base_url']}")
+    print(f"  Model: {config['model']}")
+    print(f"  API Key: {config['api_key']}")
+    print()
     
     # 加载所有session文件
     print(f"正在从 {args.input} 加载session文件...")
@@ -1451,7 +1876,13 @@ def main():
             
             if args.task in ['reason', 'all']:
                 reason_output = os.path.join(collector_output_dir, 'action_reason.json')
-                analyze_reason_module(collector_session_data, reason_output)
+                analyze_reason_module(
+                    collector_session_data, 
+                    reason_output,
+                    aug_reason=args.aug_reason,
+                    aug_reason_count=args.aug_reason_count,
+                    aug_reason_temperature=args.aug_reason_temperature
+                )
     
     if args.mode in ['prepare', 'all']:
         # 为每个标注者分别准备训练数据
@@ -1472,7 +1903,10 @@ def main():
                 persona_file=persona_file if os.path.exists(persona_file) else None,
                 random_seed=args.random_seed,
                 think=args.think,
-                audio_version=args.audio
+                audio_version=args.audio,
+                aug=args.aug,
+                aug_factor=args.aug_factor,
+                aug_duration_range=args.aug_duration_range
             )
     
     print("\n" + "="*60)

@@ -36,7 +36,7 @@ def parse_actions_from_completion(completion: str) -> List[str]:
     if not code:
         return recorded_actions
 
-    def watch(second: float = 2.0):
+    def watch(second: float = 5.0):
         recorded_actions.append({'type': 'watch', 'second': second})
 
     def skip():
