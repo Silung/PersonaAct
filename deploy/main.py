@@ -305,7 +305,7 @@ class MainWindow(QMainWindow):
         user_prompt = get_user_prompt(
             history_screenshots=self.ai_history_screenshots[-self.ai_max_history:] if self.ai_history_screenshots else None,
             history_actions=self.ai_history_actions[-self.ai_max_history:] if self.ai_history_actions else None,
-            current_screenshot=screenshot_path,
+            current_screenshots=[screenshot_path],
             audio_transcript=None
         )
         
