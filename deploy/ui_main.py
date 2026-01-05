@@ -20,11 +20,12 @@ class Ui_MainWindow(object):
         # ================ 左侧配置面板 ================
         self.config_panel = QWidget()
         self.config_panel.setObjectName("config_panel")
-        self.config_panel.setMinimumWidth(350)
-        self.config_panel.setMaximumWidth(400)
+        self.config_panel.setMinimumWidth(800)
+        self.config_panel.setMaximumWidth(900)
         
-        self.config_layout = QVBoxLayout(self.config_panel)
+        self.config_layout = QGridLayout(self.config_panel)
         self.config_layout.setObjectName("config_layout")
+        self.config_layout.setSpacing(10)
         
         # 设备配置组
         self.device_group = QGroupBox("设备配置")
@@ -43,7 +44,8 @@ class Ui_MainWindow(object):
         self.flip.setObjectName("flip")
         self.device_layout.addWidget(self.flip)
         
-        self.config_layout.addWidget(self.device_group)
+        # 第1行第1列：设备配置
+        self.config_layout.addWidget(self.device_group, 0, 0, 1, 1)
         
         # AI配置组
         self.ai_group = QGroupBox("AI配置")
@@ -57,6 +59,22 @@ class Ui_MainWindow(object):
         self.model_url_layout.addWidget(self.label_model_url)
         self.model_url_layout.addWidget(self.model_url_input)
         self.ai_layout.addLayout(self.model_url_layout)
+        
+        self.api_key_layout = QHBoxLayout()
+        self.label_api_key = QLabel("API Key:")
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setText("1234567890")
+        self.api_key_layout.addWidget(self.label_api_key)
+        self.api_key_layout.addWidget(self.api_key_input)
+        self.ai_layout.addLayout(self.api_key_layout)
+        
+        self.model_layout = QHBoxLayout()
+        self.label_model = QLabel("Model:")
+        self.model_input = QLineEdit()
+        self.model_input.setText("qwen")
+        self.model_layout.addWidget(self.label_model)
+        self.model_layout.addWidget(self.model_input)
+        self.ai_layout.addLayout(self.model_layout)
         
         self.persona_input_layout = QHBoxLayout()
         self.label_persona = QLabel("Persona*:")
@@ -81,6 +99,13 @@ class Ui_MainWindow(object):
         self.use_persona_checkbox.setObjectName("use_persona_checkbox")
         self.use_persona_checkbox.setChecked(True)  # 默认启用
         self.ai_layout.addWidget(self.use_persona_checkbox)
+        
+        # Reverse Persona复选框
+        self.reverse_persona_checkbox = QCheckBox("Reverse Persona")
+        self.reverse_persona_checkbox.setObjectName("reverse_persona_checkbox")
+        self.reverse_persona_checkbox.setChecked(False)  # 默认关闭
+        self.reverse_persona_checkbox.setToolTip("开启后，watch时间反转为max(0,15-t)，like/comment/share无效")
+        self.ai_layout.addWidget(self.reverse_persona_checkbox)
         
         self.history_layout = QHBoxLayout()
         self.label_history = QLabel("历史窗口:")
@@ -118,7 +143,112 @@ class Ui_MainWindow(object):
         self.button_test_model.setObjectName("button_test_model")
         self.ai_layout.addWidget(self.button_test_model)
         
-        self.config_layout.addWidget(self.ai_group)
+        # 第2行跨两列：AI配置
+        self.config_layout.addWidget(self.ai_group, 1, 0, 1, 2)
+        
+        # 输出配置组
+        self.output_group = QGroupBox("输出配置")
+        self.output_group.setObjectName("output_group")
+        self.output_layout = QVBoxLayout(self.output_group)
+        
+        self.output_info_label = QLabel("数据保存在: ../deploy_log/")
+        self.output_info_label.setStyleSheet("QLabel { color: #666; font-size: 12px; }")
+        self.output_layout.addWidget(self.output_info_label)
+        
+        self.save_video_checkbox = QCheckBox("保存视频")
+        self.save_video_checkbox.setChecked(True)
+        self.output_layout.addWidget(self.save_video_checkbox)
+        
+        self.save_audio_checkbox = QCheckBox("保存音频")
+        self.save_audio_checkbox.setChecked(True)
+        self.output_layout.addWidget(self.save_audio_checkbox)
+        
+        self.save_xml_checkbox = QCheckBox("保存XML")
+        self.save_xml_checkbox.setChecked(True)
+        self.output_layout.addWidget(self.save_xml_checkbox)
+        
+        # 第1行第2列：输出配置
+        self.config_layout.addWidget(self.output_group, 0, 1, 1, 1)
+        
+        # 休息设置组
+        self.rest_group = QGroupBox("休息设置")
+        self.rest_group.setObjectName("rest_group")
+        self.rest_layout = QVBoxLayout(self.rest_group)
+        
+        # 启用休息功能
+        self.rest_enable_checkbox = QCheckBox("启用休息功能")
+        self.rest_enable_checkbox.setObjectName("rest_enable_checkbox")
+        self.rest_enable_checkbox.setChecked(False)
+        self.rest_layout.addWidget(self.rest_enable_checkbox)
+        
+        # 平台选择
+        self.platform_layout = QHBoxLayout()
+        self.platform_label = QLabel("平台:")
+        self.platform_combo = QComboBox()
+        self.platform_combo.setObjectName("platform_combo")
+        self.platform_combo.addItems(["bilibili", "douyin", "kuaishou"])
+        self.platform_layout.addWidget(self.platform_label)
+        self.platform_layout.addWidget(self.platform_combo)
+        self.rest_layout.addLayout(self.platform_layout)
+        
+        # 工作时长
+        self.work_duration_layout = QHBoxLayout()
+        self.work_duration_label = QLabel("工作时长(分钟):")
+        self.work_duration_spinbox = QSpinBox()
+        self.work_duration_spinbox.setObjectName("work_duration_spinbox")
+        self.work_duration_spinbox.setRange(1, 180)
+        self.work_duration_spinbox.setValue(30)
+        self.work_duration_layout.addWidget(self.work_duration_label)
+        self.work_duration_layout.addWidget(self.work_duration_spinbox)
+        self.rest_layout.addLayout(self.work_duration_layout)
+        
+        # 休息时长
+        self.rest_duration_layout = QHBoxLayout()
+        self.rest_duration_label = QLabel("休息时长(分钟):")
+        self.rest_duration_spinbox = QSpinBox()
+        self.rest_duration_spinbox.setObjectName("rest_duration_spinbox")
+        self.rest_duration_spinbox.setRange(1, 60)
+        self.rest_duration_spinbox.setValue(5)
+        self.rest_duration_layout.addWidget(self.rest_duration_label)
+        self.rest_duration_layout.addWidget(self.rest_duration_spinbox)
+        self.rest_layout.addLayout(self.rest_duration_layout)
+        
+        # 随机偏移
+        self.rest_offset_layout = QHBoxLayout()
+        self.rest_offset_label = QLabel("随机偏移(分钟):")
+        self.rest_offset_spinbox = QSpinBox()
+        self.rest_offset_spinbox.setObjectName("rest_offset_spinbox")
+        self.rest_offset_spinbox.setRange(0, 30)
+        self.rest_offset_spinbox.setValue(2)
+        self.rest_offset_layout.addWidget(self.rest_offset_label)
+        self.rest_offset_layout.addWidget(self.rest_offset_spinbox)
+        self.rest_layout.addLayout(self.rest_offset_layout)
+        
+        # 第3行第1列：休息设置
+        self.config_layout.addWidget(self.rest_group, 2, 0, 1, 1)
+        
+        # 调试组
+        self.debug_group = QGroupBox("调试选项")
+        self.debug_group.setObjectName("debug_group")
+        self.debug_layout = QVBoxLayout(self.debug_group)
+        
+        # 指针位置显示按钮
+        self.button_toggle_pointer = QPushButton("显示指针位置")
+        self.button_toggle_pointer.setObjectName("button_toggle_pointer")
+        self.button_toggle_pointer.setCheckable(True)
+        self.button_toggle_pointer.setStyleSheet("""
+            QPushButton {
+                background-color: #607D8B;
+                color: white;
+            }
+            QPushButton:checked {
+                background-color: #FF5722;
+            }
+        """)
+        self.debug_layout.addWidget(self.button_toggle_pointer)
+        
+        # 第3行第2列：调试选项
+        self.config_layout.addWidget(self.debug_group, 2, 1, 1, 1)
         
         # 交互控制组
         self.control_group = QGroupBox("交互控制")
@@ -155,52 +285,8 @@ class Ui_MainWindow(object):
         self.step_label.setStyleSheet("QLabel { font-size: 16px; font-weight: bold; color: #2196F3; padding: 10px; }")
         self.control_layout.addWidget(self.step_label)
         
-        self.config_layout.addWidget(self.control_group)
-        
-        # 输出配置组
-        self.output_group = QGroupBox("输出配置")
-        self.output_group.setObjectName("output_group")
-        self.output_layout = QVBoxLayout(self.output_group)
-        
-        self.output_info_label = QLabel("数据保存在: ../deploy_log/")
-        self.output_info_label.setStyleSheet("QLabel { color: #666; font-size: 12px; }")
-        self.output_layout.addWidget(self.output_info_label)
-        
-        self.save_video_checkbox = QCheckBox("保存视频")
-        self.save_video_checkbox.setChecked(True)
-        self.output_layout.addWidget(self.save_video_checkbox)
-        
-        self.save_audio_checkbox = QCheckBox("保存音频")
-        self.save_audio_checkbox.setChecked(True)
-        self.output_layout.addWidget(self.save_audio_checkbox)
-        
-        self.save_xml_checkbox = QCheckBox("保存XML")
-        self.save_xml_checkbox.setChecked(True)
-        self.output_layout.addWidget(self.save_xml_checkbox)
-        
-        self.config_layout.addWidget(self.output_group)
-        
-        # 调试组
-        self.debug_group = QGroupBox("调试选项")
-        self.debug_group.setObjectName("debug_group")
-        self.debug_layout = QVBoxLayout(self.debug_group)
-        
-        # 指针位置显示按钮
-        self.button_toggle_pointer = QPushButton("显示指针位置")
-        self.button_toggle_pointer.setObjectName("button_toggle_pointer")
-        self.button_toggle_pointer.setCheckable(True)
-        self.button_toggle_pointer.setStyleSheet("""
-            QPushButton {
-                background-color: #607D8B;
-                color: white;
-            }
-            QPushButton:checked {
-                background-color: #FF5722;
-            }
-        """)
-        self.debug_layout.addWidget(self.button_toggle_pointer)
-        
-        self.config_layout.addWidget(self.debug_group)
+        # 第4行跨两列：交互控制
+        self.config_layout.addWidget(self.control_group, 3, 0, 1, 2)
         
         # 日志显示
         self.log_group = QGroupBox("运行日志")
@@ -212,9 +298,12 @@ class Ui_MainWindow(object):
         self.log_text.setReadOnly(True)
         self.log_layout.addWidget(self.log_text)
         
-        self.config_layout.addWidget(self.log_group)
+        # 第5行跨两列：日志显示
+        self.config_layout.addWidget(self.log_group, 4, 0, 1, 2)
         
-        self.config_layout.addStretch()
+        # 设置列宽比例，使两列尽量均等
+        self.config_layout.setColumnStretch(0, 1)
+        self.config_layout.setColumnStretch(1, 1)
         
         self.main_horizontal_layout.addWidget(self.config_panel)
         

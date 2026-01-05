@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         self.ai_step_count = 0
         self.is_interacting = False
         self.session_data = None  # 存储会话数据，用于生成最终结果
+        self.reverse_persona = False  # Reverse Persona模式（反事实模式）
         
         # LLM延迟跟踪（用于watch函数补偿）
         self.llm_delay_history = []  # 最近10次延迟记录
@@ -97,7 +98,6 @@ class MainWindow(QMainWindow):
         self.is_resting = False  # 是否正在休息
         self.rest_check_timer = QTimer()  # 检查休息时间的定时器
         self.rest_check_timer.timeout.connect(self._check_rest_time)
-        self.current_platform = "bilibili"  # 当前平台
         
         # 状态更新定时器
         self.status_update_timer = QTimer()
@@ -180,74 +180,19 @@ class MainWindow(QMainWindow):
         self.ui.label.mouseMoveEvent = self.on_mouse_event(scrcpy.ACTION_MOVE)
         self.ui.label.mouseReleaseEvent = self.on_mouse_event(scrcpy.ACTION_UP)
         
-        # 初始化休息功能UI
-        self._init_rest_ui()
+        # 绑定休息功能UI事件
+        self.ui.rest_enable_checkbox.stateChanged.connect(self._on_rest_enable_changed)
+        self.ui.platform_combo.currentTextChanged.connect(self._on_platform_changed)
+        self.ui.work_duration_spinbox.valueChanged.connect(self._on_work_duration_changed)
+        self.ui.rest_duration_spinbox.valueChanged.connect(self._on_rest_duration_changed)
+        self.ui.rest_offset_spinbox.valueChanged.connect(self._on_rest_offset_changed)
+        
+        # 初始化当前平台（从UI获取）
+        self.current_platform = self.ui.platform_combo.currentText()
         
         # 初始化图片质量显示
         self.ui.image_quality_value_label.setText(str(self.ui.image_quality_slider.value()))
 
-    def _init_rest_ui(self):
-        """初始化休息功能UI"""
-        try:
-            # 创建休息功能分组框
-            rest_group = QGroupBox("休息设置")
-            rest_layout = QVBoxLayout()
-            
-            # 启用休息功能复选框
-            self.rest_enable_checkbox = QCheckBox("启用休息功能")
-            self.rest_enable_checkbox.stateChanged.connect(self._on_rest_enable_changed)
-            rest_layout.addWidget(self.rest_enable_checkbox)
-            
-            # 平台选择
-            platform_layout = QHBoxLayout()
-            platform_layout.addWidget(QLabel("平台:"))
-            self.platform_combo = QComboBox()
-            self.platform_combo.addItems(["bilibili", "抖音", "快手", "小红书"])
-            self.platform_combo.currentTextChanged.connect(self._on_platform_changed)
-            platform_layout.addWidget(self.platform_combo)
-            rest_layout.addLayout(platform_layout)
-            
-            # 工作时长
-            work_layout = QHBoxLayout()
-            work_layout.addWidget(QLabel("工作时长(分钟):"))
-            self.work_duration_spinbox = QSpinBox()
-            self.work_duration_spinbox.setRange(1, 180)
-            self.work_duration_spinbox.setValue(30)
-            self.work_duration_spinbox.valueChanged.connect(self._on_work_duration_changed)
-            work_layout.addWidget(self.work_duration_spinbox)
-            rest_layout.addLayout(work_layout)
-            
-            # 休息时长
-            rest_time_layout = QHBoxLayout()
-            rest_time_layout.addWidget(QLabel("休息时长(分钟):"))
-            self.rest_duration_spinbox = QSpinBox()
-            self.rest_duration_spinbox.setRange(1, 60)
-            self.rest_duration_spinbox.setValue(5)
-            self.rest_duration_spinbox.valueChanged.connect(self._on_rest_duration_changed)
-            rest_time_layout.addWidget(self.rest_duration_spinbox)
-            rest_layout.addLayout(rest_time_layout)
-            
-            # 随机偏移
-            offset_layout = QHBoxLayout()
-            offset_layout.addWidget(QLabel("随机偏移(分钟):"))
-            self.rest_offset_spinbox = QSpinBox()
-            self.rest_offset_spinbox.setRange(0, 30)
-            self.rest_offset_spinbox.setValue(2)
-            self.rest_offset_spinbox.valueChanged.connect(self._on_rest_offset_changed)
-            offset_layout.addWidget(self.rest_offset_spinbox)
-            rest_layout.addLayout(offset_layout)
-            
-            rest_group.setLayout(rest_layout)
-            
-            # 将分组框添加到左侧配置布局
-            if hasattr(self.ui, 'config_layout'):
-                self.ui.config_layout.addWidget(rest_group)
-                self.log_info("✅ 休息功能UI已添加")
-            else:
-                self.log_info("⚠️ 无法添加休息功能UI：找不到config_layout")
-        except Exception as e:
-            self.log_info(f"⚠️ 初始化休息功能UI失败: {e}")
-    
     def _on_rest_enable_changed(self, state):
         """休息功能启用状态改变"""
         self.rest_enabled = (state == 2)  # Qt.Checked == 2
@@ -279,16 +224,16 @@ class MainWindow(QMainWindow):
         Args:
             enabled: True表示启用，False表示禁用
         """
-        if hasattr(self, 'rest_enable_checkbox'):
-            self.rest_enable_checkbox.setEnabled(enabled)
-        if hasattr(self, 'platform_combo'):
-            self.platform_combo.setEnabled(enabled)
-        if hasattr(self, 'work_duration_spinbox'):
-            self.work_duration_spinbox.setEnabled(enabled)
-        if hasattr(self, 'rest_duration_spinbox'):
-            self.rest_duration_spinbox.setEnabled(enabled)
-        if hasattr(self, 'rest_offset_spinbox'):
-            self.rest_offset_spinbox.setEnabled(enabled)
+        if hasattr(self.ui, 'rest_enable_checkbox'):
+            self.ui.rest_enable_checkbox.setEnabled(enabled)
+        if hasattr(self.ui, 'platform_combo'):
+            self.ui.platform_combo.setEnabled(enabled)
+        if hasattr(self.ui, 'work_duration_spinbox'):
+            self.ui.work_duration_spinbox.setEnabled(enabled)
+        if hasattr(self.ui, 'rest_duration_spinbox'):
+            self.ui.rest_duration_spinbox.setEnabled(enabled)
+        if hasattr(self.ui, 'rest_offset_spinbox'):
+            self.ui.rest_offset_spinbox.setEnabled(enabled)
     
     def _set_all_config_enabled(self, enabled: bool):
         """启用或禁用所有配置控件（在交互状态下锁定配置）
@@ -302,9 +247,12 @@ class MainWindow(QMainWindow):
         
         # AI配置
         self.ui.model_url_input.setEnabled(enabled)
+        self.ui.api_key_input.setEnabled(enabled)
+        self.ui.model_input.setEnabled(enabled)
         self.ui.persona_input.setEnabled(enabled)
         self.ui.persona_select.setEnabled(enabled)
         self.ui.use_persona_checkbox.setEnabled(enabled)
+        self.ui.reverse_persona_checkbox.setEnabled(enabled)
         self.ui.history_spinbox.setEnabled(enabled)
         self.ui.button_test_model.setEnabled(enabled)
         
@@ -452,7 +400,8 @@ class MainWindow(QMainWindow):
             self.log_info(f"✅ 截图已保存: {test_screenshot_path.name}")
             
             # 3. 创建测试客户端
-            test_client = OpenAI(base_url=model_url, api_key="1234567890")
+            api_key = self.ui.api_key_input.text().strip() or "1234567890"
+            test_client = OpenAI(base_url=model_url, api_key=api_key)
             
             # 4. 加载persona（如果选择了且启用了使用Persona）
             persona_template = self.ui.persona_select.currentText()
@@ -521,8 +470,9 @@ class MainWindow(QMainWindow):
             self.log_info(f"🤖 正在调用LLM...")
             llm_start_time = time.time()
             
+            model_name = self.ui.model_input.text().strip() or "qwen"
             response = test_client.chat.completions.create(
-                model="qwen",
+                model=model_name,
                 messages=messages,
                 max_tokens=256,
                 temperature=0.0
@@ -586,7 +536,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请输入Persona名称（必填）")
             return
         
-        self.ai_client = OpenAI(base_url=model_url, api_key="1234567890")
+        api_key = self.ui.api_key_input.text().strip() or "1234567890"
+        self.ai_client = OpenAI(base_url=model_url, api_key=api_key)
         self.ai_max_history = self.ui.history_spinbox.value()
         
         # 加载persona模板（如果选择了且启用了使用Persona）
@@ -596,6 +547,13 @@ class MainWindow(QMainWindow):
             self.ai_persona = self._load_persona(persona_template)
         else:
             self.ai_persona = None
+        
+        # 读取Reverse Persona设置
+        self.reverse_persona = self.ui.reverse_persona_checkbox.isChecked()
+        if self.reverse_persona:
+            self.log_info("⚠️ Reverse Persona模式已启用（反事实模式）")
+            self.log_info("   - watch时间反转为 max(0, 15-t)")
+            self.log_info("   - like/comment/share 动作无效")
         
         deploy_log_dir = Path(__file__).parent.parent / "deploy_log"
         deploy_log_dir.mkdir(exist_ok=True, parents=True)
@@ -622,6 +580,7 @@ class MainWindow(QMainWindow):
             "session_id": session_id,
             "collector": persona_name,  # persona保存在collector中
             "platform": platform_name,
+            "reverse_persona": self.reverse_persona,  # 是否启用反事实模式
             "start_time": datetime.datetime.now().isoformat(),
             "actions": []
         }
@@ -927,8 +886,9 @@ class MainWindow(QMainWindow):
         else:
             llm_start_time = time.time()
         
+        model_name = self.ui.model_input.text().strip() or "qwen"
         response = self.ai_client.chat.completions.create(
-            model="qwen",
+            model=model_name,
             messages=messages,
             max_tokens=256,
             temperature=0.0
@@ -992,13 +952,28 @@ class MainWindow(QMainWindow):
             self.log_info(f"  → swipe({x1}, {y1}, {x2}, {y2})")
         
         def watch(second=5.0):
-            # 减去LLM延迟（从query到回复的时间）
-            adjusted_second = max(0.0, second - self.llm_avg_delay)
-            self.log_info(f"  → watch({second}s)")
-            if adjusted_second > 0:
-                time.sleep(adjusted_second)
+            # Reverse Persona模式：时间反转为 max(0, 15-t)
+            if self.reverse_persona:
+                reversed_second = max(0.0, 15.0 - second)
+                # 减去LLM延迟
+                adjusted_second = max(0.0, reversed_second - self.llm_avg_delay)
+                self.log_info(f"  → watch({second}s) [Reverse: {reversed_second}s, adjusted: {adjusted_second:.1f}s]")
+                if adjusted_second > 0:
+                    time.sleep(adjusted_second)
+            else:
+                # 正常模式：减去LLM延迟（从query到回复的时间）
+                adjusted_second = max(0.0, second - self.llm_avg_delay)
+                self.log_info(f"  → watch({second}s)")
+                if adjusted_second > 0:
+                    time.sleep(adjusted_second)
         
         def like():
+            # Reverse Persona模式：动作无效
+            if self.reverse_persona:
+                self.log_info(f"  → like() [Reverse模式: 无效]")
+                return
+            
+            # 正常模式：执行点赞（当前已注释）
             # like_x = int(screen_width * 0.95)
             # like_y = int(screen_height * 0.65)
             # tap(like_x, like_y)
@@ -1006,6 +981,12 @@ class MainWindow(QMainWindow):
             self.log_info(f"  → like()")
         
         def comment(text=""):
+            # Reverse Persona模式：动作无效
+            if self.reverse_persona:
+                self.log_info(f"  → comment({text}) [Reverse模式: 无效]")
+                return
+            
+            # 正常模式：执行评论（当前已注释）
             # comment_x = int(screen_width * 0.95)
             # comment_y = int(screen_height * 0.75)
             # tap(comment_x, comment_y)
@@ -1021,6 +1002,12 @@ class MainWindow(QMainWindow):
 
         
         def share(who=""):
+            # Reverse Persona模式：动作无效
+            if self.reverse_persona:
+                self.log_info(f"  → share({who}) [Reverse模式: 无效]")
+                return
+            
+            # 正常模式：执行分享（当前已注释）
             # share_x = int(screen_width * 0.95)
             # share_y = int(screen_height * 0.85)
             # tap(share_x, share_y)
