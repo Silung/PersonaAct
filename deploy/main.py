@@ -552,7 +552,7 @@ class MainWindow(QMainWindow):
         self.reverse_persona = self.ui.reverse_persona_checkbox.isChecked()
         if self.reverse_persona:
             self.log_info("⚠️ Reverse Persona模式已启用（反事实模式）")
-            self.log_info("   - watch时间反转为 max(0, 15-t)")
+            self.log_info("   - watch时间反转为 max(0, 30-t)")
             self.log_info("   - like/comment/share 动作无效")
         
         deploy_log_dir = Path(__file__).parent.parent / "deploy_log"
@@ -952,9 +952,9 @@ class MainWindow(QMainWindow):
             self.log_info(f"  → swipe({x1}, {y1}, {x2}, {y2})")
         
         def watch(second=5.0):
-            # Reverse Persona模式：时间反转为 max(0, 15-t)
+            # Reverse Persona模式：时间反转为 max(0, 30-t)
             if self.reverse_persona:
-                reversed_second = max(0.0, 15.0 - second)
+                reversed_second = max(0.0, 30.0 - second)
                 # 减去LLM延迟
                 adjusted_second = max(0.0, reversed_second - self.llm_avg_delay)
                 self.log_info(f"  → watch({second}s) [Reverse: {reversed_second}s, adjusted: {adjusted_second:.1f}s]")
