@@ -273,7 +273,6 @@ def calculate_coi(sessions: List[Dict], duration_threshold: float = None, catego
        JS_divergence = 0.5 * KL(P||M) + 0.5 * KL(Q||M), where M = 0.5*(P+Q)
        使用base=2时，JS_divergence范围0-1
        JS-COI范围0-1，1表示分布完全相同（bubble强），0表示完全不同（成功逃离）
-    
     使用这些COI指标衡量escape potential
     """
     # 按collector分组
