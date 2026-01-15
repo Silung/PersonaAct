@@ -11,10 +11,8 @@ import queue
 import uiautomator2 as u2
 import cv2
 import numpy as np
-import wave
 import re
 
-import pyaudio
 import logging
 from adbutils import adb
 from PySide6.QtGui import QImage, QKeyEvent, QMouseEvent, QPixmap, Qt
@@ -121,49 +119,22 @@ class MainWindow(QMainWindow):
         self.video_fps = 30  # 固定帧率
         self.current_recording_start_time = None  # 记录录制开始时间
         
-        # 音频录制
-        self.is_audio_recording = False
-        self.audio_buffer = []
-        self.audio_sample_rate = 48000
-        self.audio_channels = 1
-        
-        # 音频播放
-        self.audio_stream = None
-        self.pyaudio_instance = None
-        
         self.window_size_initialized = False
         self.last_display_size = None
-        
-        # 初始化音频播放
-        try:
-            self.pyaudio_instance = pyaudio.PyAudio()
-            self.audio_stream = self.pyaudio_instance.open(
-                format=pyaudio.paFloat32,
-                channels=1,
-                rate=self.audio_sample_rate,
-                output=True,
-                frames_per_buffer=2048
-            )
-            print(f"✅ 音频播放初始化成功 (采样率: {self.audio_sample_rate})")
-        except Exception as e:
-            print(f"⚠️ 音频播放初始化失败: {e}")
-            self.audio_stream = None
-            self.pyaudio_instance = None
 
-        # Setup client
+        # Setup client (无音频，适用于Android 9及以下)
+        # 注意：max_fps=0 表示不限制帧率（Android 9 不支持 max_fps 参数）
+        # encoder_name=None 让服务器自动选择可用的编码器
         self.client = scrcpy.Client(
             device=self.device,
             flip=self.ui.flip.isChecked(),
-            bitrate=1000000000,
-            encoder_name=encoder_name,
-            max_fps=60,
-            audio=True,
-            audio_codec="opus",
-            audio_bit_rate=128000,
+            bitrate=8000000,  # 8Mbps，合理的默认值
+            encoder_name=None,  # 自动选择编码器
+            max_fps=0,  # 不限制帧率
+            codec_name=None,  # 自动选择编解码器
         )
         self.client.add_listener(scrcpy.EVENT_INIT, self.on_init)
         self.client.add_listener(scrcpy.EVENT_FRAME, self.on_frame)
-        self.client.add_listener(scrcpy.EVENT_AUDIO, self.on_audio)
 
         # Bind事件
         self.ui.button_test_model.clicked.connect(self.test_model_connection)
@@ -1102,25 +1073,24 @@ class MainWindow(QMainWindow):
             self.log_info(f"错误代码:\n{code}")
 
     def start_recording(self, video_path, audio_path):
-        """开始录制视频和音频"""
+        """开始录制视频"""
         if self.is_recording:
             self.stop_recording()
         
         self.current_video_path = video_path
-        self.current_audio_path = audio_path
+        self.current_audio_path = audio_path  # 保留参数但不使用
         self.video_writer = None  # 延迟初始化，等第一帧到来时创建
         self.video_frame_count = 0
-        self.audio_buffer = []
         self.is_recording = True
-        self.is_audio_recording = True
         self.current_recording_start_time = time.time()
         self.current_xml_text = None  # 清空XML文本缓存
         
-        self.log_info(f"🎬 开始录制: {video_path.name}")
+        if video_path:
+            self.log_info(f"🎬 开始录制: {video_path.name}")
         return True
 
     def stop_recording(self, save_files=True):
-        """停止录制并异步写入音频
+        """停止录制视频
         
         Args:
             save_files: 是否保存文件。False时直接丢弃，不保存到磁盘
@@ -1129,20 +1099,17 @@ class MainWindow(QMainWindow):
             return None, None
         
         self.is_recording = False
-        self.is_audio_recording = False
         
         video_path = self.current_video_path
         audio_path = self.current_audio_path
         frame_count = self.video_frame_count
-        audio_data = self.audio_buffer.copy() if save_files else []
         video_writer = self.video_writer
         
         # 清空内存和关闭writer
         self.video_writer = None
         self.video_frame_count = 0
-        self.audio_buffer = []
         
-        # 异步写入音频和关闭视频
+        # 异步关闭视频
         def _write_files():
             # 关闭视频writer
             if video_writer:
@@ -1156,54 +1123,11 @@ class MainWindow(QMainWindow):
                         video_path.unlink()
                 except Exception as e:
                     self.log_info(f"⚠️ 视频保存失败: {e}")
-            
-            # 写入音频
-            if save_files and audio_data and audio_path:
-                try:
-                    with wave.open(str(audio_path), 'wb') as wav_file:
-                        wav_file.setnchannels(self.audio_channels)
-                        wav_file.setsampwidth(2)
-                        wav_file.setframerate(self.audio_sample_rate)
-                        for data in audio_data:
-                            wav_file.writeframes(data)
-                    
-                    audio_size = audio_path.stat().st_size / 1024
-                    self.log_info(f"✅ 音频: {audio_path.name} ({audio_size:.1f}KB)")
-                except Exception as e:
-                    self.log_info(f"⚠️ 音频保存失败: {e}")
         
         threading.Thread(target=_write_files, daemon=True).start()
         
         return video_path, audio_path
 
-    def on_audio(self, audio_data):
-        """音频帧回调 - 用于播放和录制"""
-        if audio_data is None or not isinstance(audio_data, np.ndarray):
-            return
-        
-        try:
-            # 转换为单声道 float32
-            if audio_data.ndim == 2:
-                # 立体声：取平均值转为单声道
-                audio_mono = audio_data.mean(axis=0).astype(np.float32)
-            else:
-                audio_mono = audio_data.astype(np.float32)
-            
-            # 归一化到 float32 范围
-            if audio_mono.dtype == np.int16:
-                audio_mono = audio_mono / 32768.0
-            
-            # 播放音频
-            if self.audio_stream:
-                self.audio_stream.write(audio_mono.tobytes(), exception_on_underflow=False)
-            
-            # 录制音频
-            if self.is_audio_recording:
-                audio_int16 = (audio_mono * 32767).astype(np.int16)
-                self.audio_buffer.append(audio_int16.tobytes())
-        except Exception:
-            pass
-    
     def choose_device(self, device):
         if device not in self.devices:
             msgBox = QMessageBox()
@@ -1301,8 +1225,6 @@ class MainWindow(QMainWindow):
 
     def on_init(self):
         self.setWindowTitle(f"Persona视频交互系统 - {self.client.device_name}")
-        if self.audio_stream:
-            self.log_info("✅ 音频播放已启用")
         
     def on_frame(self, frame):
         app.processEvents()
@@ -1398,17 +1320,6 @@ class MainWindow(QMainWindow):
                 except:
                     pass
             self.video_frame_count = 0
-        
-        # 清空音频缓冲区
-        self.is_audio_recording = False
-        self.audio_buffer = []
-        
-        # 关闭音频播放
-        if self.audio_stream:
-            self.audio_stream.stop_stream()
-            self.audio_stream.close()
-        if self.pyaudio_instance:
-            self.pyaudio_instance.terminate()
         
         self.client.stop()
         self.alive = False

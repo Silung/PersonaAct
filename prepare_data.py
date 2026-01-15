@@ -277,7 +277,7 @@ def extract_video_frames(video_path: str, output_dir: str = None, fps: int = 24)
         output_dir.mkdir(parents=True, exist_ok=True)
     
     # 打开视频
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(video_path, cv2.CAP_DSHOW)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if total_frames <= 0:

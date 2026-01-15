@@ -9,23 +9,25 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName("MainWindow")
-        MainWindow.resize(1400, 800)
+        MainWindow.resize(1600, 900)
         
         self.centralwidget = QWidget(MainWindow)
         self.centralwidget.setObjectName("centralwidget")
         
         self.main_horizontal_layout = QHBoxLayout(self.centralwidget)
         self.main_horizontal_layout.setObjectName("main_horizontal_layout")
+        self.main_horizontal_layout.setSpacing(10)
         
-        # ================ 左侧配置面板 ================
-        self.config_panel = QWidget()
-        self.config_panel.setObjectName("config_panel")
-        self.config_panel.setMinimumWidth(800)
-        self.config_panel.setMaximumWidth(900)
+        # ================ 第一列：设备配置、AI配置、休息设置 ================
+        self.column1_panel = QWidget()
+        self.column1_panel.setObjectName("column1_panel")
+        self.column1_panel.setMinimumWidth(280)
+        self.column1_panel.setMaximumWidth(320)
         
-        self.config_layout = QGridLayout(self.config_panel)
-        self.config_layout.setObjectName("config_layout")
-        self.config_layout.setSpacing(10)
+        self.column1_layout = QVBoxLayout(self.column1_panel)
+        self.column1_layout.setObjectName("column1_layout")
+        self.column1_layout.setSpacing(10)
+        self.column1_layout.setContentsMargins(5, 5, 5, 5)
         
         # 设备配置组
         self.device_group = QGroupBox("设备配置")
@@ -44,8 +46,7 @@ class Ui_MainWindow(object):
         self.flip.setObjectName("flip")
         self.device_layout.addWidget(self.flip)
         
-        # 第1行第1列：设备配置
-        self.config_layout.addWidget(self.device_group, 0, 0, 1, 1)
+        self.column1_layout.addWidget(self.device_group)
         
         # AI配置组
         self.ai_group = QGroupBox("AI配置")
@@ -143,32 +144,7 @@ class Ui_MainWindow(object):
         self.button_test_model.setObjectName("button_test_model")
         self.ai_layout.addWidget(self.button_test_model)
         
-        # 第2行跨两列：AI配置
-        self.config_layout.addWidget(self.ai_group, 1, 0, 1, 2)
-        
-        # 输出配置组
-        self.output_group = QGroupBox("输出配置")
-        self.output_group.setObjectName("output_group")
-        self.output_layout = QVBoxLayout(self.output_group)
-        
-        self.output_info_label = QLabel("数据保存在: ../deploy_log/")
-        self.output_info_label.setStyleSheet("QLabel { color: #666; font-size: 12px; }")
-        self.output_layout.addWidget(self.output_info_label)
-        
-        self.save_video_checkbox = QCheckBox("保存视频")
-        self.save_video_checkbox.setChecked(True)
-        self.output_layout.addWidget(self.save_video_checkbox)
-        
-        self.save_audio_checkbox = QCheckBox("保存音频")
-        self.save_audio_checkbox.setChecked(True)
-        self.output_layout.addWidget(self.save_audio_checkbox)
-        
-        self.save_xml_checkbox = QCheckBox("保存XML")
-        self.save_xml_checkbox.setChecked(True)
-        self.output_layout.addWidget(self.save_xml_checkbox)
-        
-        # 第1行第2列：输出配置
-        self.config_layout.addWidget(self.output_group, 0, 1, 1, 1)
+        self.column1_layout.addWidget(self.ai_group)
         
         # 休息设置组
         self.rest_group = QGroupBox("休息设置")
@@ -224,8 +200,46 @@ class Ui_MainWindow(object):
         self.rest_offset_layout.addWidget(self.rest_offset_spinbox)
         self.rest_layout.addLayout(self.rest_offset_layout)
         
-        # 第3行第1列：休息设置
-        self.config_layout.addWidget(self.rest_group, 2, 0, 1, 1)
+        self.column1_layout.addWidget(self.rest_group)
+        
+        # 添加弹性空间
+        self.column1_layout.addStretch()
+        
+        self.main_horizontal_layout.addWidget(self.column1_panel)
+        
+        # ================ 第二列：输出配置、调试选项、交互控制 ================
+        self.column2_panel = QWidget()
+        self.column2_panel.setObjectName("column2_panel")
+        self.column2_panel.setMinimumWidth(220)
+        self.column2_panel.setMaximumWidth(260)
+        
+        self.column2_layout = QVBoxLayout(self.column2_panel)
+        self.column2_layout.setObjectName("column2_layout")
+        self.column2_layout.setSpacing(10)
+        self.column2_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # 输出配置组
+        self.output_group = QGroupBox("输出配置")
+        self.output_group.setObjectName("output_group")
+        self.output_layout = QVBoxLayout(self.output_group)
+        
+        self.output_info_label = QLabel("数据保存在: ../deploy_log/")
+        self.output_info_label.setStyleSheet("QLabel { color: #666; font-size: 12px; }")
+        self.output_layout.addWidget(self.output_info_label)
+        
+        self.save_video_checkbox = QCheckBox("保存视频")
+        self.save_video_checkbox.setChecked(True)
+        self.output_layout.addWidget(self.save_video_checkbox)
+        
+        self.save_audio_checkbox = QCheckBox("保存音频")
+        self.save_audio_checkbox.setChecked(True)
+        self.output_layout.addWidget(self.save_audio_checkbox)
+        
+        self.save_xml_checkbox = QCheckBox("保存XML")
+        self.save_xml_checkbox.setChecked(True)
+        self.output_layout.addWidget(self.save_xml_checkbox)
+        
+        self.column2_layout.addWidget(self.output_group)
         
         # 调试组
         self.debug_group = QGroupBox("调试选项")
@@ -247,8 +261,7 @@ class Ui_MainWindow(object):
         """)
         self.debug_layout.addWidget(self.button_toggle_pointer)
         
-        # 第3行第2列：调试选项
-        self.config_layout.addWidget(self.debug_group, 2, 1, 1, 1)
+        self.column2_layout.addWidget(self.debug_group)
         
         # 交互控制组
         self.control_group = QGroupBox("交互控制")
@@ -285,29 +298,14 @@ class Ui_MainWindow(object):
         self.step_label.setStyleSheet("QLabel { font-size: 16px; font-weight: bold; color: #2196F3; padding: 10px; }")
         self.control_layout.addWidget(self.step_label)
         
-        # 第4行跨两列：交互控制
-        self.config_layout.addWidget(self.control_group, 3, 0, 1, 2)
+        self.column2_layout.addWidget(self.control_group)
         
-        # 日志显示
-        self.log_group = QGroupBox("运行日志")
-        self.log_group.setObjectName("log_group")
-        self.log_layout = QVBoxLayout(self.log_group)
+        # 添加弹性空间
+        self.column2_layout.addStretch()
         
-        self.log_text = QTextEdit()
-        self.log_text.setObjectName("log_text")
-        self.log_text.setReadOnly(True)
-        self.log_layout.addWidget(self.log_text)
+        self.main_horizontal_layout.addWidget(self.column2_panel)
         
-        # 第5行跨两列：日志显示
-        self.config_layout.addWidget(self.log_group, 4, 0, 1, 2)
-        
-        # 设置列宽比例，使两列尽量均等
-        self.config_layout.setColumnStretch(0, 1)
-        self.config_layout.setColumnStretch(1, 1)
-        
-        self.main_horizontal_layout.addWidget(self.config_panel)
-        
-        # ================ 右侧屏幕展示 ================
+        # ================ 中间：实时屏幕 ================
         self.screen_panel = QWidget()
         self.screen_panel.setObjectName("screen_panel")
         self.screen_layout = QVBoxLayout(self.screen_panel)
@@ -329,8 +327,33 @@ class Ui_MainWindow(object):
         
         self.main_horizontal_layout.addWidget(self.screen_panel)
         
-        self.main_horizontal_layout.setStretch(0, 0)
-        self.main_horizontal_layout.setStretch(1, 1)
+        # ================ 右侧：运行日志 ================
+        self.log_panel = QWidget()
+        self.log_panel.setObjectName("log_panel")
+        self.log_panel.setMinimumWidth(300)
+        self.log_panel.setMaximumWidth(400)
+        
+        self.log_panel_layout = QVBoxLayout(self.log_panel)
+        self.log_panel_layout.setContentsMargins(5, 5, 5, 5)
+        
+        self.log_group = QGroupBox("运行日志")
+        self.log_group.setObjectName("log_group")
+        self.log_layout = QVBoxLayout(self.log_group)
+        
+        self.log_text = QTextEdit()
+        self.log_text.setObjectName("log_text")
+        self.log_text.setReadOnly(True)
+        self.log_layout.addWidget(self.log_text)
+        
+        self.log_panel_layout.addWidget(self.log_group)
+        
+        self.main_horizontal_layout.addWidget(self.log_panel)
+        
+        # 设置各列的拉伸比例
+        self.main_horizontal_layout.setStretch(0, 0)  # 第一列：固定宽度
+        self.main_horizontal_layout.setStretch(1, 0)  # 第二列：固定宽度
+        self.main_horizontal_layout.setStretch(2, 1)  # 实时屏幕：可拉伸
+        self.main_horizontal_layout.setStretch(3, 0)  # 日志：固定宽度
 
         MainWindow.setCentralWidget(self.centralwidget)
         self.retranslateUi(MainWindow)
