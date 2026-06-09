@@ -41,19 +41,6 @@ python infer.py --model_path <path_to_model> --data_path data/
 ## Dataset
 
 The dataset contains:
-- 1,719 video interaction samples from 2 personas across 27 sessions
+- 4,485 video interaction samples from 8 personas across 86 sessions
 - Video frames (1 FPS), audio transcripts, and user actions
 - 25+ content categories with metadata
-
-<!--
-## Citation
-
-```bibtex
-@article{personaact2025,
-  title={PersonaAct: Simulating Short-Video Users with Personalized Agents for Filter Bubble Auditing},
-  author={Zhao, Shilong and others},
-  journal={AAAI},
-  year={2025}
-}
-```
--->
