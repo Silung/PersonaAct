@@ -1,0 +1,122 @@
+{
+  "session_id": "20251124_173004",
+  "collector": "b",
+  "platform": "bilibili",
+  "start_time": "2025-11-24T17:30:04.648954",
+  "actions": [
+    {
+      "timestamp": "20251124T093721419",
+      "actions": [
+        {
+          "type": "like"
+        },
+        {
+          "type": "share",
+          "text": "炒股的同学"
+        }
+      ],
+      "viewing_duration": 436.77,
+      "xml_path": "raw_data\\b\\xml\\20251124T093721419.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T173004650.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T173004650.wav"
+    },
+    {
+      "timestamp": "20251124T093808554",
+      "actions": [],
+      "viewing_duration": 45.68,
+      "xml_path": "raw_data\\b\\xml\\20251124T093808554.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T093722870.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T093722870.wav"
+    },
+    {
+      "timestamp": "20251124T093822467",
+      "actions": [],
+      "viewing_duration": 12.67,
+      "xml_path": "raw_data\\b\\xml\\20251124T093822467.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T093809801.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T093809801.wav"
+    },
+    {
+      "timestamp": "20251124T093825710",
+      "actions": [],
+      "viewing_duration": 2.0,
+      "xml_path": "raw_data\\b\\xml\\20251124T093825710.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T093823706.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T093823706.wav"
+    },
+    {
+      "timestamp": "20251124T093834052",
+      "actions": [],
+      "viewing_duration": 6.95,
+      "xml_path": "raw_data\\b\\xml\\20251124T093834052.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T093827103.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T093827103.wav"
+    },
+    {
+      "timestamp": "20251124T093845516",
+      "actions": [],
+      "viewing_duration": 10.18,
+      "xml_path": "raw_data\\b\\xml\\20251124T093845516.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T093835330.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T093835330.wav"
+    },
+    {
+      "timestamp": "20251124T093901627",
+      "actions": [],
+      "viewing_duration": 14.86,
+      "xml_path": "raw_data\\b\\xml\\20251124T093901627.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T093846763.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T093846763.wav"
+    },
+    {
+      "timestamp": "20251124T093908206",
+      "actions": [],
+      "viewing_duration": 5.37,
+      "xml_path": "raw_data\\b\\xml\\20251124T093908206.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T093902833.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T093902833.wav"
+    },
+    {
+      "timestamp": "20251124T093920615",
+      "actions": [],
+      "viewing_duration": 11.14,
+      "xml_path": "raw_data\\b\\xml\\20251124T093920615.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T093909473.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T093909473.wav"
+    },
+    {
+      "timestamp": "20251124T094021022",
+      "actions": [],
+      "viewing_duration": 59.19,
+      "xml_path": "raw_data\\b\\xml\\20251124T094021022.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T093921829.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T093921829.wav"
+    },
+    {
+      "timestamp": "20251124T094025021",
+      "actions": [],
+      "viewing_duration": 2.76,
+      "xml_path": "raw_data\\b\\xml\\20251124T094025021.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T094022261.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T094022261.wav"
+    },
+    {
+      "timestamp": "20251124T094030352",
+      "actions": [],
+      "viewing_duration": 4.12,
+      "xml_path": "raw_data\\b\\xml\\20251124T094030352.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T094026227.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T094026227.wav"
+    },
+    {
+      "timestamp": "20251124T094033894",
+      "actions": [],
+      "viewing_duration": 2.33,
+      "xml_path": "raw_data\\b\\xml\\20251124T094033894.xml",
+      "video_path": "raw_data\\b\\videos\\20251124T094031569.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251124T094031569.wav"
+    }
+  ],
+  "end_time": "2025-11-24T17:40:46.386610",
+  "total_actions": 13
+}

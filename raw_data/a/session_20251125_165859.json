@@ -1,0 +1,22 @@
+{
+  "session_id": "20251125_165859",
+  "collector": "a",
+  "platform": "douyin",
+  "start_time": "2025-11-25T16:58:59.153069",
+  "actions": [
+    {
+      "timestamp": "20251125T085917999",
+      "actions": [],
+      "viewing_duration": 18.84,
+      "xml_path": "raw_data\\a\\xml\\20251125T085917999.xml",
+      "video_path": "raw_data\\a\\videos\\20251125T165859160.mp4",
+      "audio_path": "raw_data\\a\\audios\\20251125T165859160.wav"
+    },
+    {
+      "timestamp": "20251125T085924322",
+      "actions": [],
+      "viewing_duration": 0.0,
+      "xml_path": "raw_data\\a\\xml\\20251125T085924322.xml"
+    }
+  ]
+}

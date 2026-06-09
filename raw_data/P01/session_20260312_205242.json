@@ -1,0 +1,62 @@
+{
+  "session_id": "20260312_205242",
+  "collector": "P01",
+  "platform": "douyin",
+  "start_time": "2026-03-12T20:52:42.563318",
+  "actions": [
+    {
+      "timestamp": "20260312T125245101",
+      "actions": [],
+      "viewing_duration": 2.53,
+      "xml_path": "raw_data\\P01\\xml\\20260312T125245101.xml",
+      "video_path": "raw_data\\P01\\videos\\20260312T205242569.mp4",
+      "audio_path": "raw_data\\P01\\audios\\20260312T205242569.wav"
+    },
+    {
+      "timestamp": "20260312T125406205",
+      "actions": [
+        {
+          "type": "like"
+        }
+      ],
+      "viewing_duration": 77.81,
+      "xml_path": "raw_data\\P01\\xml\\20260312T125406205.xml",
+      "video_path": "raw_data\\P01\\videos\\20260312T125248397.mp4",
+      "audio_path": "raw_data\\P01\\audios\\20260312T125248397.wav"
+    },
+    {
+      "timestamp": "20260312T125409770",
+      "actions": [],
+      "viewing_duration": 2.09,
+      "xml_path": "raw_data\\P01\\xml\\20260312T125409770.xml",
+      "video_path": "raw_data\\P01\\videos\\20260312T125407683.mp4",
+      "audio_path": "raw_data\\P01\\audios\\20260312T125407683.wav"
+    },
+    {
+      "timestamp": "20260312T125419752",
+      "actions": [],
+      "viewing_duration": 8.56,
+      "xml_path": "raw_data\\P01\\xml\\20260312T125419752.xml",
+      "video_path": "raw_data\\P01\\videos\\20260312T125411188.mp4",
+      "audio_path": "raw_data\\P01\\audios\\20260312T125411188.wav"
+    },
+    {
+      "timestamp": "20260312T125430550",
+      "actions": [],
+      "viewing_duration": 9.46,
+      "xml_path": "raw_data\\P01\\xml\\20260312T125430550.xml",
+      "video_path": "raw_data\\P01\\videos\\20260312T125421086.mp4",
+      "audio_path": "raw_data\\P01\\audios\\20260312T125421086.wav"
+    },
+    {
+      "timestamp": "20260312T125434524",
+      "actions": [],
+      "viewing_duration": 2.48,
+      "xml_path": "raw_data\\P01\\xml\\20260312T125434524.xml",
+      "video_path": "raw_data\\P01\\videos\\20260312T125432044.mp4",
+      "audio_path": "raw_data\\P01\\audios\\20260312T125432044.wav"
+    }
+  ],
+  "end_time": "2026-03-12T20:54:50.525991",
+  "total_actions": 6
+}

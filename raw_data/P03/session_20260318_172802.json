@@ -1,0 +1,34 @@
+{
+  "session_id": "20260318_172802",
+  "collector": "P03",
+  "platform": "kuaishou",
+  "start_time": "2026-03-18T17:28:02.538040",
+  "actions": [
+    {
+      "timestamp": "20260318T092803501",
+      "actions": [],
+      "viewing_duration": 0.95,
+      "xml_path": "raw_data\\P03\\xml\\20260318T092803501.xml",
+      "video_path": "raw_data\\P03\\videos\\20260318T172802550.mp4",
+      "audio_path": "raw_data\\P03\\audios\\20260318T172802550.wav"
+    },
+    {
+      "timestamp": "20260318T092821813",
+      "actions": [],
+      "viewing_duration": 16.59,
+      "xml_path": "raw_data\\P03\\xml\\20260318T092821813.xml",
+      "video_path": "raw_data\\P03\\videos\\20260318T092805221.mp4",
+      "audio_path": "raw_data\\P03\\audios\\20260318T092805221.wav"
+    },
+    {
+      "timestamp": "20260318T092823853",
+      "actions": [],
+      "viewing_duration": 0.68,
+      "xml_path": "raw_data\\P03\\xml\\20260318T092823853.xml",
+      "video_path": "raw_data\\P03\\videos\\20260318T092823177.mp4",
+      "audio_path": "raw_data\\P03\\audios\\20260318T092823177.wav"
+    }
+  ],
+  "end_time": "2026-03-18T17:30:07.762599",
+  "total_actions": 3
+}

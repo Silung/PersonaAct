@@ -1,0 +1,40 @@
+{
+  "session_id": "20251125_170158",
+  "collector": "a",
+  "platform": "douyin",
+  "start_time": "2025-11-25T17:01:58.805567",
+  "actions": [
+    {
+      "timestamp": "20251125T090201752",
+      "actions": [
+        {
+          "type": "like"
+        }
+      ],
+      "viewing_duration": 2.94,
+      "xml_path": "raw_data\\a\\xml\\20251125T090201752.xml",
+      "video_path": "raw_data\\a\\videos\\20251125T170158812.mp4",
+      "audio_path": "raw_data\\a\\audios\\20251125T170158812.wav"
+    },
+    {
+      "timestamp": "20251125T090207914",
+      "actions": [
+        {
+          "type": "like"
+        }
+      ],
+      "viewing_duration": 0.0,
+      "xml_path": "raw_data\\a\\xml\\20251125T090207914.xml"
+    },
+    {
+      "timestamp": "20251125T090222146",
+      "actions": [
+        {
+          "type": "like"
+        }
+      ],
+      "viewing_duration": 0.0,
+      "xml_path": "raw_data\\a\\xml\\20251125T090222146.xml"
+    }
+  ]
+}

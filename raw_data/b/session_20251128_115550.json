@@ -1,0 +1,346 @@
+{
+  "session_id": "20251128_115550",
+  "collector": "b",
+  "platform": "bilibili",
+  "start_time": "2025-11-28T11:55:50.259694",
+  "actions": [
+    {
+      "timestamp": "20251128T035621025",
+      "actions": [
+        {
+          "type": "like"
+        }
+      ],
+      "viewing_duration": 30.76,
+      "xml_path": "raw_data\\b\\xml\\20251128T035621025.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T115550262.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T115550262.wav"
+    },
+    {
+      "timestamp": "20251128T035625283",
+      "actions": [],
+      "viewing_duration": 2.59,
+      "xml_path": "raw_data\\b\\xml\\20251128T035625283.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T035622692.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T035622692.wav"
+    },
+    {
+      "timestamp": "20251128T035627878",
+      "actions": [],
+      "viewing_duration": 1.32,
+      "xml_path": "raw_data\\b\\xml\\20251128T035627878.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T035626555.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T035626555.wav"
+    },
+    {
+      "timestamp": "20251128T035632485",
+      "actions": [],
+      "viewing_duration": 3.28,
+      "xml_path": "raw_data\\b\\xml\\20251128T035632485.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T035629200.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T035629200.wav"
+    },
+    {
+      "timestamp": "20251128T035636639",
+      "actions": [],
+      "viewing_duration": 2.88,
+      "xml_path": "raw_data\\b\\xml\\20251128T035636639.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T035633757.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T035633757.wav"
+    },
+    {
+      "timestamp": "20251128T040027243",
+      "actions": [
+        {
+          "type": "like"
+        }
+      ],
+      "viewing_duration": 229.26,
+      "xml_path": "raw_data\\b\\xml\\20251128T040027243.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T035637985.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T035637985.wav"
+    },
+    {
+      "timestamp": "20251128T040033041",
+      "actions": [],
+      "viewing_duration": 4.52,
+      "xml_path": "raw_data\\b\\xml\\20251128T040033041.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040028525.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040028525.wav"
+    },
+    {
+      "timestamp": "20251128T040131633",
+      "actions": [],
+      "viewing_duration": 57.33,
+      "xml_path": "raw_data\\b\\xml\\20251128T040131633.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040034301.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040034301.wav"
+    },
+    {
+      "timestamp": "20251128T040134847",
+      "actions": [],
+      "viewing_duration": 1.97,
+      "xml_path": "raw_data\\b\\xml\\20251128T040134847.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040132875.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040132875.wav"
+    },
+    {
+      "timestamp": "20251128T040515129",
+      "actions": [],
+      "viewing_duration": 219.08,
+      "xml_path": "raw_data\\b\\xml\\20251128T040515129.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040136047.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040136047.wav"
+    },
+    {
+      "timestamp": "20251128T040519892",
+      "actions": [],
+      "viewing_duration": 3.53,
+      "xml_path": "raw_data\\b\\xml\\20251128T040519892.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040516367.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040516367.wav"
+    },
+    {
+      "timestamp": "20251128T040537289",
+      "actions": [],
+      "viewing_duration": 16.16,
+      "xml_path": "raw_data\\b\\xml\\20251128T040537289.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040521133.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040521133.wav"
+    },
+    {
+      "timestamp": "20251128T040541766",
+      "actions": [],
+      "viewing_duration": 3.19,
+      "xml_path": "raw_data\\b\\xml\\20251128T040541766.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040538572.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040538572.wav"
+    },
+    {
+      "timestamp": "20251128T040626065",
+      "actions": [],
+      "viewing_duration": 43.08,
+      "xml_path": "raw_data\\b\\xml\\20251128T040626065.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040542990.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040542990.wav"
+    },
+    {
+      "timestamp": "20251128T040642704",
+      "actions": [],
+      "viewing_duration": 15.31,
+      "xml_path": "raw_data\\b\\xml\\20251128T040642704.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040627392.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040627392.wav"
+    },
+    {
+      "timestamp": "20251128T040646267",
+      "actions": [],
+      "viewing_duration": 2.33,
+      "xml_path": "raw_data\\b\\xml\\20251128T040646267.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040643941.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040643941.wav"
+    },
+    {
+      "timestamp": "20251128T040752522",
+      "actions": [],
+      "viewing_duration": 65.04,
+      "xml_path": "raw_data\\b\\xml\\20251128T040752522.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040647483.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040647483.wav"
+    },
+    {
+      "timestamp": "20251128T040756111",
+      "actions": [],
+      "viewing_duration": 2.39,
+      "xml_path": "raw_data\\b\\xml\\20251128T040756111.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040753724.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040753724.wav"
+    },
+    {
+      "timestamp": "20251128T040904579",
+      "actions": [],
+      "viewing_duration": 67.21,
+      "xml_path": "raw_data\\b\\xml\\20251128T040904579.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040757365.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040757365.wav"
+    },
+    {
+      "timestamp": "20251128T041158641",
+      "actions": [],
+      "viewing_duration": 172.84,
+      "xml_path": "raw_data\\b\\xml\\20251128T041158641.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T040905798.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T040905798.wav"
+    },
+    {
+      "timestamp": "20251128T041215598",
+      "actions": [],
+      "viewing_duration": 15.66,
+      "xml_path": "raw_data\\b\\xml\\20251128T041215598.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041159941.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041159941.wav"
+    },
+    {
+      "timestamp": "20251128T041240148",
+      "actions": [],
+      "viewing_duration": 23.35,
+      "xml_path": "raw_data\\b\\xml\\20251128T041240148.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041216802.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041216802.wav"
+    },
+    {
+      "timestamp": "20251128T041305074",
+      "actions": [],
+      "viewing_duration": 23.69,
+      "xml_path": "raw_data\\b\\xml\\20251128T041305074.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041241383.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041241383.wav"
+    },
+    {
+      "timestamp": "20251128T041317569",
+      "actions": [],
+      "viewing_duration": 11.27,
+      "xml_path": "raw_data\\b\\xml\\20251128T041317569.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041306297.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041306297.wav"
+    },
+    {
+      "timestamp": "20251128T041320797",
+      "actions": [],
+      "viewing_duration": 2.03,
+      "xml_path": "raw_data\\b\\xml\\20251128T041320797.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041318769.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041318769.wav"
+    },
+    {
+      "timestamp": "20251128T041344262",
+      "actions": [],
+      "viewing_duration": 22.26,
+      "xml_path": "raw_data\\b\\xml\\20251128T041344262.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041322004.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041322004.wav"
+    },
+    {
+      "timestamp": "20251128T041411035",
+      "actions": [],
+      "viewing_duration": 25.54,
+      "xml_path": "raw_data\\b\\xml\\20251128T041411035.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041345492.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041345492.wav"
+    },
+    {
+      "timestamp": "20251128T041415103",
+      "actions": [],
+      "viewing_duration": 2.84,
+      "xml_path": "raw_data\\b\\xml\\20251128T041415103.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041412264.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041412264.wav"
+    },
+    {
+      "timestamp": "20251128T041419263",
+      "actions": [],
+      "viewing_duration": 2.95,
+      "xml_path": "raw_data\\b\\xml\\20251128T041419263.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041416317.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041416317.wav"
+    },
+    {
+      "timestamp": "20251128T041433237",
+      "actions": [],
+      "viewing_duration": 12.73,
+      "xml_path": "raw_data\\b\\xml\\20251128T041433237.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041420505.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041420505.wav"
+    },
+    {
+      "timestamp": "20251128T041609560",
+      "actions": [],
+      "viewing_duration": 95.1,
+      "xml_path": "raw_data\\b\\xml\\20251128T041609560.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041434458.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041434458.wav"
+    },
+    {
+      "timestamp": "20251128T041628802",
+      "actions": [],
+      "viewing_duration": 18.01,
+      "xml_path": "raw_data\\b\\xml\\20251128T041628802.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041610786.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041610786.wav"
+    },
+    {
+      "timestamp": "20251128T041632574",
+      "actions": [],
+      "viewing_duration": 2.46,
+      "xml_path": "raw_data\\b\\xml\\20251128T041632574.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041630113.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041630113.wav"
+    },
+    {
+      "timestamp": "20251128T041649788",
+      "actions": [],
+      "viewing_duration": 15.96,
+      "xml_path": "raw_data\\b\\xml\\20251128T041649788.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041633825.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041633825.wav"
+    },
+    {
+      "timestamp": "20251128T041653837",
+      "actions": [],
+      "viewing_duration": 2.83,
+      "xml_path": "raw_data\\b\\xml\\20251128T041653837.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041651005.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041651005.wav"
+    },
+    {
+      "timestamp": "20251128T041710780",
+      "actions": [],
+      "viewing_duration": 15.75,
+      "xml_path": "raw_data\\b\\xml\\20251128T041710780.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041655035.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041655035.wav"
+    },
+    {
+      "timestamp": "20251128T041736022",
+      "actions": [],
+      "viewing_duration": 24.03,
+      "xml_path": "raw_data\\b\\xml\\20251128T041736022.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041711995.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041711995.wav"
+    },
+    {
+      "timestamp": "20251128T041756355",
+      "actions": [],
+      "viewing_duration": 19.12,
+      "xml_path": "raw_data\\b\\xml\\20251128T041756355.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041737239.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041737239.wav"
+    },
+    {
+      "timestamp": "20251128T041923701",
+      "actions": [],
+      "viewing_duration": 86.11,
+      "xml_path": "raw_data\\b\\xml\\20251128T041923701.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041757591.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041757591.wav"
+    },
+    {
+      "timestamp": "20251128T041927081",
+      "actions": [],
+      "viewing_duration": 2.16,
+      "xml_path": "raw_data\\b\\xml\\20251128T041927081.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041924923.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041924923.wav"
+    },
+    {
+      "timestamp": "20251128T042040525",
+      "actions": [],
+      "viewing_duration": 72.22,
+      "xml_path": "raw_data\\b\\xml\\20251128T042040525.xml",
+      "video_path": "raw_data\\b\\videos\\20251128T041928306.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251128T041928306.wav"
+    }
+  ],
+  "end_time": "2025-11-28T12:20:43.662210",
+  "total_actions": 41
+}

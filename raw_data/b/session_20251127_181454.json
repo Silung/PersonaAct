@@ -1,0 +1,70 @@
+{
+  "session_id": "20251127_181454",
+  "collector": "b",
+  "platform": "bilibili",
+  "start_time": "2025-11-27T18:14:54.781205",
+  "actions": [
+    {
+      "timestamp": "20251127T101646971",
+      "actions": [
+        {
+          "type": "like"
+        }
+      ],
+      "viewing_duration": 112.19,
+      "xml_path": "raw_data\\b\\xml\\20251127T101646971.xml",
+      "video_path": "raw_data\\b\\videos\\20251127T181454783.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251127T181454783.wav"
+    },
+    {
+      "timestamp": "20251127T101650912",
+      "actions": [],
+      "viewing_duration": 2.49,
+      "xml_path": "raw_data\\b\\xml\\20251127T101650912.xml",
+      "video_path": "raw_data\\b\\videos\\20251127T101648427.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251127T101648427.wav"
+    },
+    {
+      "timestamp": "20251127T101724074",
+      "actions": [],
+      "viewing_duration": 31.92,
+      "xml_path": "raw_data\\b\\xml\\20251127T101724074.xml",
+      "video_path": "raw_data\\b\\videos\\20251127T101652155.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251127T101652155.wav"
+    },
+    {
+      "timestamp": "20251127T101727060",
+      "actions": [],
+      "viewing_duration": 1.71,
+      "xml_path": "raw_data\\b\\xml\\20251127T101727060.xml",
+      "video_path": "raw_data\\b\\videos\\20251127T101725352.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251127T101725352.wav"
+    },
+    {
+      "timestamp": "20251127T101912877",
+      "actions": [],
+      "viewing_duration": 104.55,
+      "xml_path": "raw_data\\b\\xml\\20251127T101912877.xml",
+      "video_path": "raw_data\\b\\videos\\20251127T101728323.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251127T101728323.wav"
+    },
+    {
+      "timestamp": "20251127T101917835",
+      "actions": [],
+      "viewing_duration": 3.6,
+      "xml_path": "raw_data\\b\\xml\\20251127T101917835.xml",
+      "video_path": "raw_data\\b\\videos\\20251127T101914239.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251127T101914239.wav"
+    },
+    {
+      "timestamp": "20251127T101922940",
+      "actions": [],
+      "viewing_duration": 3.84,
+      "xml_path": "raw_data\\b\\xml\\20251127T101922940.xml",
+      "video_path": "raw_data\\b\\videos\\20251127T101919099.mp4",
+      "audio_path": "raw_data\\b\\audios\\20251127T101919099.wav"
+    }
+  ],
+  "end_time": "2025-11-27T18:20:23.895843",
+  "total_actions": 7
+}

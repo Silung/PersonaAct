@@ -1,0 +1,22 @@
+{
+  "session_id": "20260312_212949",
+  "collector": "P01",
+  "platform": "xiaohongshu",
+  "start_time": "2026-03-12T21:29:49.695607",
+  "actions": [
+    {
+      "timestamp": "20260312T133141759",
+      "actions": [
+        {
+          "type": "like"
+        }
+      ],
+      "viewing_duration": 112.06,
+      "xml_path": "raw_data\\P01\\xml\\20260312T133141759.xml",
+      "video_path": "raw_data\\P01\\videos\\20260312T212949701.mp4",
+      "audio_path": "raw_data\\P01\\audios\\20260312T212949701.wav"
+    }
+  ],
+  "end_time": "2026-03-12T21:31:53.449763",
+  "total_actions": 1
+}
